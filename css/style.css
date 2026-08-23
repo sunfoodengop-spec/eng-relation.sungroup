@@ -238,6 +238,7 @@ tr.clickable:hover { background: var(--bg-hover); cursor: pointer; }
 }
 .org-tree-node:hover { border-color: var(--accent); background: var(--bg-hover); transform: translate(-50%, -50%) scale(1.03); }
 .org-tree-node.gm-node { border-color: var(--accent); background: var(--bg-panel-2); }
+.org-tree-node.span-node { border: 1.5px dashed var(--accent); background: var(--bg-panel-2); }
 .org-tree-node .name { font-size: 12.5px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 160px; }
 .org-tree-node .pos { font-size: 10.5px; color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 160px; }
 .org-tree-node .achv-row { margin-top: 4px; display: flex; align-items: center; gap: 5px; }

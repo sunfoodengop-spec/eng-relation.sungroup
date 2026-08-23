@@ -9,13 +9,21 @@ const TOP_LEVEL_THRESHOLD = 80; // ระดับตั้งแต่นี้
 // ⚠️ CUSTOMIZE PER PROJECT: จัดกลุ่มแผนกย่อยเข้าเป็นสายงานหลักตาม Org Chart
 // ที่ได้รับมา — แก้ไข key/label/match ให้ตรงกับฝ่ายจริงของบริษัทนี้
 // (ดูวิธีแปลง Org Chart เป็นค่านี้ใน references/org_chart_parsing.md ของ Skill)
+//
+// ลำดับคอลัมน์ (ซ้าย->ขวา) ยืนยันแล้ว: LMN1 | LMN2 | RD | OP | SRN | ENF |
+// Prod_SRN | พลังงาน | ASRS — คนที่คุมมากกว่า 1 แผนก (เช่น อัษฎาวุธ คุม OP+SRN+ENF,
+// เพียว คุม OP+SRN, บั๊กโจ้ คุม พลังงาน+ASRS) ต้องมีแผนกที่ตัวเองคุมเรียงติดกัน
+// ในลำดับนี้เสมอ ไม่งั้นการ "วาง Block ตรงกลาง" จะดูผิดเพี้ยน
 const DEPT_GROUPS = [
   { key: 'LMN1', label: 'LMN1', match: ['LMN1'] },
   { key: 'LMN2', label: 'LMN2', match: ['LMN2'] },
   { key: 'RD', label: 'RD', match: ['RD'] },
-  { key: 'OPRF_ENF_SRN', label: 'OPRF / ENF / SRN', match: ['OP', 'SRN', 'ENF'] },
+  { key: 'OP', label: 'OP', match: ['OP'] },
+  { key: 'SRN', label: 'SRN', match: ['SRN'] },
+  { key: 'ENF', label: 'ENF', match: ['ENF'] },
   { key: 'PROD_SRN', label: 'Prod SRN', match: ['Prod SRN'] },
-  { key: 'ENE_ASRS', label: 'ENE & ASRS', match: ['พลังงาน', 'ASRS'] },
+  { key: 'ENE', label: 'พลังงาน', match: ['พลังงาน'] },
+  { key: 'ASRS', label: 'ASRS', match: ['ASRS'] },
   // key ควรสั้นไม่มีช่องว่าง, match คือ department string ทุกค่าที่พบใน
   // seed_org.sql ที่ควรถูกจัดเข้ากลุ่มคอลัมน์นี้
 ];
@@ -23,6 +31,16 @@ function groupOf(dept) {
   if (!dept) return null;
   const g = DEPT_GROUPS.find(g => g.match.includes(dept));
   return g ? g.key : 'อื่นๆ';
+}
+// คนที่คุมมากกว่า 1 แผนก: department ใน seed SQL ใส่เป็น raw tag คั่นด้วย comma
+// เช่น 'OP,SRN,ENF' — deptKeysOf คืนค่าเป็น array ของ column key ทั้งหมดที่ match
+// (ความยาว > 1 = ต้องวาง Block ตรงกลางคร่อมทุกคอลัมน์ที่ match, ดู renderMatrixRow)
+function deptKeysOf(dept) {
+  if (!dept) return [];
+  return dept.split(',').map(s => s.trim()).filter(Boolean).map(tag => {
+    const g = DEPT_GROUPS.find(g => g.match.includes(tag));
+    return g ? g.key : 'อื่นๆ';
+  });
 }
 
 // ---- Layout constants (px) -------------------------------------------------
@@ -56,19 +74,34 @@ export async function render(container, ctx) {
   const rest = allPeople.filter(p => p.org_level < TOP_LEVEL_THRESHOLD);
   const topLevelsPresent = [...new Set(topPeople.map(p => p.org_level))].sort((a, b) => b - a);
 
-  const columns = DEPT_GROUPS.filter(g => rest.some(p => groupOf(p.department) === g.key));
-  if (rest.some(p => groupOf(p.department) === 'อื่นๆ')) columns.push({ key: 'อื่นๆ', label: 'อื่นๆ' });
+  const columns = DEPT_GROUPS.filter(g => rest.some(p => deptKeysOf(p.department).includes(g.key)));
+  if (rest.some(p => deptKeysOf(p.department).length === 1 && deptKeysOf(p.department)[0] === 'อื่นๆ')) columns.push({ key: 'อื่นๆ', label: 'อื่นๆ' });
 
   const rows = LEVELS.filter(lv => lv < TOP_LEVEL_THRESHOLD);
+
+  // แยกคนธรรมดา (อยู่คอลัมน์เดียว) กับคนที่คุมมากกว่า 1 แผนก (span หลายคอลัมน์)
+  const singlePeople = rest.filter(p => deptKeysOf(p.department).length <= 1);
+  const spanPeople = rest.filter(p => deptKeysOf(p.department).length > 1);
 
   // จำนวนคนมากสุดในแต่ละแถว (ทุกคอลัมน์รวมกัน) เพื่อกำหนดความสูงแถว
   const cellPeople = {}; // `${level}|${colKey}` -> [people]
   rows.forEach(lv => columns.forEach(col => {
-    cellPeople[`${lv}|${col.key}`] = rest.filter(p => p.org_level === lv && groupOf(p.department) === col.key);
+    cellPeople[`${lv}|${col.key}`] = singlePeople.filter(p => p.org_level === lv && groupOf(p.department) === col.key);
   }));
   const rowMaxCount = {};
   rows.forEach(lv => {
     rowMaxCount[lv] = Math.max(1, ...columns.map(col => cellPeople[`${lv}|${col.key}`].length || 1));
+  });
+  // คนที่ span หลายคอลัมน์ต้องการอย่างน้อย 1 แถวเพิ่ม ต่อจากคนที่อยู่คอลัมน์เดียว
+  // ที่ทับซ้อนช่วงคอลัมน์เดียวกันอยู่แล้ว (ปกติจะไม่ทับซ้อน แต่กันไว้เผื่อ)
+  const spanIdxByPerson = new Map();
+  rows.forEach(lv => {
+    spanPeople.filter(p => p.org_level === lv).forEach(p => {
+      const keys = deptKeysOf(p.department).filter(k => columns.some(c => c.key === k));
+      const idx = Math.max(0, ...keys.map(k => (cellPeople[`${lv}|${k}`] || []).length));
+      spanIdxByPerson.set(p.user_id, idx);
+      rowMaxCount[lv] = Math.max(rowMaxCount[lv], idx + 1);
+    });
   });
 
   const colX = {};
@@ -105,6 +138,15 @@ export async function render(container, ctx) {
         nodePos.set(p.user_id, { x: colX[col.key], y: y + idx * (CARD_H + CARD_GAP_Y) + CARD_H / 2 });
       });
     });
+    // คนที่ span หลายคอลัมน์: วาง Block ไว้ตรงกลางของทุกคอลัมน์ที่ตัวเองคุม
+    spanPeople.filter(p => p.org_level === lv).forEach(p => {
+      const keys = deptKeysOf(p.department).filter(k => columns.some(c => c.key === k));
+      if (!keys.length) return;
+      const xs = keys.map(k => colX[k]);
+      const centerXSpan = (Math.min(...xs) + Math.max(...xs)) / 2;
+      const idx = spanIdxByPerson.get(p.user_id) || 0;
+      nodePos.set(p.user_id, { x: centerXSpan, y: y + idx * (CARD_H + CARD_GAP_Y) + CARD_H / 2 });
+    });
     y += rowH + ROW_GAP;
   });
   const totalHeight = y - ROW_GAP + 20;
@@ -135,9 +177,13 @@ export async function render(container, ctx) {
         </svg>
         ${rows.map(lv => `<div class="org-tree-level-label" style="top:${rowTop[lv] + (rowMaxCount[lv] * (CARD_H + CARD_GAP_Y) - CARD_GAP_Y) / 2}px">${LEVEL_LABEL[lv]}</div>`).join('')}
         ${topPeople.map(p => nodeHtml(p, nodePos.get(p.user_id), true)).join('')}
-        ${rest.map(p => {
+        ${singlePeople.map(p => {
           const pos = nodePos.get(p.user_id);
           return pos ? nodeHtml(p, pos, false) : '';
+        }).join('')}
+        ${spanPeople.map(p => {
+          const pos = nodePos.get(p.user_id);
+          return pos ? nodeHtml(p, pos, false, true) : '';
         }).join('')}
       </div>
     </div>
@@ -150,9 +196,9 @@ export async function render(container, ctx) {
   allPeople.forEach(p => loadAchievementBadge(p.user_id));
 }
 
-function nodeHtml(p, pos, isTop) {
+function nodeHtml(p, pos, isTop, isSpan) {
   return `
-    <div class="org-tree-node ${isTop ? 'gm-node' : ''}" data-person="${p.user_id}" style="left:${pos.x}px;top:${pos.y}px">
+    <div class="org-tree-node ${isTop ? 'gm-node' : ''} ${isSpan ? 'span-node' : ''}" data-person="${p.user_id}" style="left:${pos.x}px;top:${pos.y}px">
       <div class="name">${p.org_level >= 95 ? '⭐ ' : p.org_level >= 85 ? '👑 ' : ''}${esc(p.first_name)} ${esc(p.last_name)}</div>
       <div class="pos">${esc(p.position_title || '')}</div>
       <div class="achv-row" id="achv-${p.user_id}">

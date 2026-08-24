@@ -12,7 +12,7 @@ const TOP_LEVEL_THRESHOLD = 80; // ระดับตั้งแต่นี้
 let departments = []; // { key, label } เรียงตาม sort_order แล้วจาก RPC
 
 // คนที่คุมมากกว่า 1 แผนก: department ใน DB เก็บเป็น raw tag คั่นด้วย comma
-// เช่น 'OP,SRN,ENF' — deptKeysOf คืนค่าเป็น array ของ dept key ทั้งหมดที่ match
+// เช่น 'OPRF,SRN,ENF' — deptKeysOf คืนค่าเป็น array ของ dept key ทั้งหมดที่ match
 // (ความยาว > 1 = ต้องวาง Block ตรงกลางคร่อมทุกคอลัมน์ที่คุม)
 function deptKeysOf(dept) {
   if (!dept) return [];

@@ -1,8 +1,31 @@
 import { api } from '../api.js';
 import { toast, openModal, closeModal, confirmDialog, escapeHtml as esc } from '../ui.js';
 
-const LEVEL_LABEL = { 95: 'ผู้บริหาร', 85: 'ผู้จัดการทั่วไป (GM)', 75: 'ผู้จัดการฝ่าย / รก.ผจก.ฝ่าย', 65: 'ผู้จัดการส่วน / รก.ผจก.ส่วน', 55: 'ผู้จัดการแผนก / รก.ผจก.แผนก', 40: 'เจ้าหน้าที่' };
+const LEVEL_LABEL = { 80: 'ผจก.ทั่วไป (GM)', 75: 'ผจก.ฝ่าย', 65: 'ผจก.ส่วน', 55: 'ผจก.แผนก', 40: 'วิศวกร/เจ้าหน้าที่' };
 const ROLE_LABEL = { STAFF: 'เจ้าหน้าที่', SUPERVISOR: 'หัวหน้างาน', ADMIN: 'ผู้ดูแลระบบ' };
+
+// ชื่อตำแหน่งมาตรฐานต่อระดับ แยกสายบริหาร (ผจก.) กับสายผู้ชำนาญการ — ระดับ 80
+// (ผจก.ทั่วไป) มีได้แค่สายบริหารสายเดียว ไม่มีสายผู้ชำนาญการคู่ขนาน
+const TRACK_TITLES = {
+  80: { MGMT: 'ผู้จัดการทั่วไป' },
+  75: { MGMT: 'ผู้จัดการฝ่าย', SPECIALIST: 'ผู้เชี่ยวชาญพิเศษ' },
+  65: { MGMT: 'ผู้จัดการส่วน', SPECIALIST: 'ผู้เชี่ยวชาญ' },
+  55: { MGMT: 'ผู้จัดการแผนก', SPECIALIST: 'ผู้ชำนาญการพิเศษ' },
+  40: { MGMT: 'วิศวกร', SPECIALIST: 'ผู้ชำนาญการ' },
+};
+function buildPositionTitle(level, track, acting) {
+  const base = (TRACK_TITLES[level] && TRACK_TITLES[level][track]) || TRACK_TITLES[level]?.MGMT || '';
+  return (acting ? 'รักษาการ' : '') + base;
+}
+// เดาสาย/สถานะรักษาการจาก position_title เดิม (ตอนแก้ไขพนักงานที่มีอยู่แล้ว) —
+// เทียบแบบ best-effort เพราะตำแหน่งเดิมบางอันมีชื่อแผนกต่อท้ายอยู่ด้วย
+function guessTrackAndActing(title, level) {
+  const t = title || '';
+  const acting = t.includes('รักษาการ');
+  const specialistLabel = TRACK_TITLES[level]?.SPECIALIST;
+  const track = specialistLabel && t.includes(specialistLabel) ? 'SPECIALIST' : 'MGMT';
+  return { track, acting };
+}
 
 let allUsers = [];
 let allDepartments = []; // { department_id, dept_key, label, sort_order }
@@ -127,7 +150,7 @@ function openUserModal(u, container) {
     .map(x => `<option value="${x.user_id}" ${u?.supervisor_id === x.user_id ? 'selected' : ''}>${esc(x.first_name)} ${esc(x.last_name)} — ${esc(x.position_title)}</option>`)
     .join('');
 
-  // แผนกที่คนนี้สังกัดอยู่แล้ว (รองรับหลายแผนก คั่นด้วย comma เช่น 'OP,SRN')
+  // แผนกที่คนนี้สังกัดอยู่แล้ว (รองรับหลายแผนก คั่นด้วย comma เช่น 'OPRF,SRN')
   const currentDeptKeys = (u?.department || '').split(',').map(s => s.trim()).filter(Boolean);
 
   const backdrop = openModal(`
@@ -138,7 +161,23 @@ function openUserModal(u, container) {
       <div class="field"><label>นามสกุล</label><input id="f-ln" value="${esc(u?.last_name || '')}"></div>
     </div>
     <div class="field"><label>ชื่อเล่น</label><input id="f-nick" value="${esc(u?.nickname || '')}"></div>
-    <div class="field"><label>ตำแหน่ง</label><input id="f-pos" value="${esc(u?.position_title || '')}"></div>
+    <div class="field-row">
+      <div class="field"><label>ระดับชั้น</label>
+        <select id="f-level">${Object.entries(LEVEL_LABEL).map(([k, v]) => `<option value="${k}" ${(u?.org_level ?? 40) == k ? 'selected' : ''}>${k} — ${v}</option>`).join('')}</select>
+      </div>
+      <div class="field"><label>สาย</label>
+        <select id="f-track">
+          <option value="MGMT">สายบริหาร (ผจก.แผนก/ส่วน/ฝ่าย)</option>
+          <option value="SPECIALIST">สายผู้ชำนาญการ</option>
+        </select>
+      </div>
+    </div>
+    <div class="field">
+      <label style="display:flex;align-items:center;gap:6px;cursor:pointer">
+        <input type="checkbox" id="f-acting" style="width:auto;margin:0"> รักษาการ
+      </label>
+    </div>
+    <div class="field"><label>ตำแหน่ง (สร้างอัตโนมัติจากระดับ + สาย ด้านบน)</label><input id="f-pos-preview" disabled></div>
     <div class="field">
       <label>แผนก (เลือกได้มากกว่า 1 ถ้าคุมหลายแผนก)</label>
       <div id="dept-checklist" class="dept-checklist"></div>
@@ -147,13 +186,9 @@ function openUserModal(u, container) {
         <button type="button" class="btn btn-sm" id="add-dept-btn">+ เพิ่มแผนก</button>
       </div>
     </div>
-    <div class="field-row">
-      <div class="field"><label>ระดับชั้น</label>
-        <select id="f-level">${Object.entries(LEVEL_LABEL).map(([k, v]) => `<option value="${k}" ${u?.org_level == k ? 'selected' : ''}>${k} — ${v}</option>`).join('')}</select>
-      </div>
-      <div class="field"><label>สิทธิ์การใช้งาน</label>
-        <select id="f-role">${Object.entries(ROLE_LABEL).map(([k, v]) => `<option value="${k}" ${u?.role === k ? 'selected' : ''}>${v}</option>`).join('')}</select>
-      </div>
+    <div class="field">
+      <label>สิทธิ์การใช้งาน</label>
+      <select id="f-role">${Object.entries(ROLE_LABEL).map(([k, v]) => `<option value="${k}" ${u?.role === k ? 'selected' : ''}>${v}</option>`).join('')}</select>
     </div>
     <div class="field"><label>ผู้บังคับบัญชา (เว้นว่างถ้าเป็นตำแหน่งสูงสุด)</label>
       <select id="f-sup"><option value="">— ไม่มี (ตำแหน่งสูงสุด) —</option>${supervisorOptions}</select>
@@ -166,6 +201,34 @@ function openUserModal(u, container) {
   `);
 
   renderDeptChecklist(backdrop, currentDeptKeys);
+
+  // ---- ตำแหน่ง: สร้างอัตโนมัติจาก ระดับ + สาย + รักษาการ ------------------
+  const levelSelect = backdrop.querySelector('#f-level');
+  const trackSelect = backdrop.querySelector('#f-track');
+  const actingCheckbox = backdrop.querySelector('#f-acting');
+  const posPreview = backdrop.querySelector('#f-pos-preview');
+
+  function refreshTrackOptionsAndPreview() {
+    const level = Number(levelSelect.value);
+    const hasSpecialistTrack = !!TRACK_TITLES[level]?.SPECIALIST;
+    trackSelect.querySelector('option[value="SPECIALIST"]').disabled = !hasSpecialistTrack;
+    if (!hasSpecialistTrack && trackSelect.value === 'SPECIALIST') trackSelect.value = 'MGMT';
+    trackSelect.disabled = !hasSpecialistTrack;
+    actingCheckbox.disabled = level >= 80; // ผจก.ทั่วไป ไม่มีสถานะรักษาการ
+    if (level >= 80) actingCheckbox.checked = false;
+    posPreview.value = buildPositionTitle(level, trackSelect.value, actingCheckbox.checked);
+  }
+
+  // ตั้งค่าเริ่มต้นจากตำแหน่งเดิม (ถ้าเป็นการแก้ไขพนักงานที่มีอยู่แล้ว)
+  const initLevel = u?.org_level ?? 40;
+  const { track: initTrack, acting: initActing } = guessTrackAndActing(u?.position_title, initLevel);
+  trackSelect.value = initTrack;
+  actingCheckbox.checked = initActing;
+  refreshTrackOptionsAndPreview();
+
+  levelSelect.onchange = refreshTrackOptionsAndPreview;
+  trackSelect.onchange = refreshTrackOptionsAndPreview;
+  actingCheckbox.onchange = refreshTrackOptionsAndPreview;
 
   backdrop.querySelector('#add-dept-btn').onclick = async () => {
     const input = backdrop.querySelector('#new-dept-name');
@@ -193,7 +256,7 @@ function openUserModal(u, container) {
         first_name: backdrop.querySelector('#f-fn').value.trim(),
         last_name: backdrop.querySelector('#f-ln').value.trim(),
         nickname: backdrop.querySelector('#f-nick').value.trim(),
-        position_title: backdrop.querySelector('#f-pos').value.trim(),
+        position_title: buildPositionTitle(Number(backdrop.querySelector('#f-level').value), backdrop.querySelector('#f-track').value, backdrop.querySelector('#f-acting').checked),
         department: getSelectedDeptKeys(backdrop).join(','),
         org_level: Number(backdrop.querySelector('#f-level').value),
         supervisor_id: sup ? Number(sup) : null,

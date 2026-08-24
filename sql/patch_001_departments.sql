@@ -22,7 +22,7 @@ insert into departments (dept_key, label, sort_order) values
     ('LMN1', 'LMN1', 1),
     ('LMN2', 'LMN2', 2),
     ('RD', 'RD', 3),
-    ('OP', 'OP', 4),
+    ('OPRF', 'OPRF', 4),
     ('SRN', 'SRN', 5),
     ('ENF', 'ENF', 6),
     ('Prod SRN', 'Prod SRN', 7),

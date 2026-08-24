@@ -34,7 +34,7 @@ document.getElementById('sidebar-foot').innerHTML =
 if (user.role === 'STAFF') {
   document.getElementById('nav-approvals').style.display = 'none';
 }
-if (user.role === 'ADMIN') {
+if (user.role === 'ADMIN' || user.role === 'SUPERVISOR') {
   document.getElementById('admin-label').style.display = 'block';
   document.getElementById('nav-admin').style.display = 'flex';
 }

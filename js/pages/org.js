@@ -1,6 +1,7 @@
 import { api } from '../api.js';
 import { toast, openModal, closeModal, confirmDialog, MONTHS_TH, escapeHtml as esc, OPERATOR_SYMBOL, OPERATOR_LABEL_TH } from '../ui.js';
 import { CURRENT_YEAR_CE } from '../config.js';
+import { openPasteImportModal } from '../pasteImport.js';
 
 const LEVELS = [80, 75, 65, 55, 40]; // บนสุด -> ล่างสุด
 const LEVEL_LABEL = { 95: 'ผู้บริหาร', 85: 'GM', 75: 'ผจก.ฝ่าย', 65: 'ผจก.ส่วน', 55: 'ผจก.แผนก', 40: 'จนท.' };
@@ -155,14 +156,28 @@ export async function render(container, ctx) {
   const totalHeight = y - ROW_GAP + 20;
 
   // ---- เส้นเชื่อม (SVG) -----------------------------------------------------
+  // เดิมเส้นแต่ละคู่หัวหน้า-ลูกน้องหักมุมที่ "จุดกึ่งกลาง" ระหว่างสอง node ซึ่งสูง
+  // ไม่เท่ากันในแต่ละคู่ (ขึ้นกับระดับของลูกน้องแต่ละคน) ทำให้เส้นจากหัวหน้าคนละคน
+  // ไปตัดกันที่ความสูงมั่วๆ ดูเหมือนเป็นสายเดียวกัน — ตอนนี้เปลี่ยนเป็น "เส้นบัส"
+  // ที่ตำแหน่งคงที่ต่อ 1 ระดับหัวหน้า (ทุกคนในระดับเดียวกันหักมุมที่ความสูงเดียวกัน
+  // เป๊ะ) โดยเฉพาะเส้นจาก GM/ผู้บริหารบนสุด บังคับให้หักมุมเหนือแถวระดับ 75 เสมอ
+  // แม้แผนกนั้นจะไม่มีคนระดับ 75 อยู่จริงก็ตาม (ข้ามลงไปแถวล่างต่อด้วยเส้นตรงดิ่ง)
+  const LINK_BUS_GAP = 14;
+  function busYForSupervisorLevel(level) {
+    const idx = LEVELS.indexOf(level);
+    const nextLevel = idx >= 0 ? LEVELS[idx + 1] : undefined;
+    if (nextLevel !== undefined && rowTop[nextLevel] !== undefined) return rowTop[nextLevel] - LINK_BUS_GAP;
+    return null; // ระดับล่างสุดไม่มีแถวถัดไปให้อ้างอิง ใช้ fallback ต่อคู่แทน
+  }
   const links = [];
   allPeople.forEach(p => {
     if (!p.supervisor_id) return;
+    const supervisor = byId.get(p.supervisor_id);
     const from = nodePos.get(p.supervisor_id);
     const to = nodePos.get(p.user_id);
-    if (!from || !to) return;
-    const midY = (from.y + CARD_H / 2 + to.y - CARD_H / 2) / 2;
-    links.push(`<path d="M ${from.x} ${from.y + CARD_H / 2} V ${midY} H ${to.x} V ${to.y - CARD_H / 2}" class="org-link" fill="none" />`);
+    if (!from || !to || !supervisor) return;
+    const busY = busYForSupervisorLevel(supervisor.org_level) ?? (from.y + CARD_H / 2 + ROW_GAP / 2);
+    links.push(`<path d="M ${from.x} ${from.y + CARD_H / 2} V ${busY} H ${to.x} V ${to.y - CARD_H / 2}" class="org-link" fill="none" />`);
   });
 
   // ---- พื้นหลังแยกสีต่อคอลัมน์แผนก (ให้เห็นการแยกแผนกชัดเจน) -----------------
@@ -184,7 +199,7 @@ export async function render(container, ctx) {
         ${colBgHtml}
         ${columns.map(col => `<div class="org-tree-col-label" style="left:${colCenterX[col.key]}px;top:${colLabelY}px;width:${colTotalW[col.key]}px">${esc(col.label)}</div>`).join('')}
         <svg class="org-tree-svg" width="${totalWidth}" height="${totalHeight}">
-          <style>.org-link { stroke: var(--border); stroke-width: 1.6px; }</style>
+          <style>.org-link { stroke: var(--border); stroke-width: 1.6px; stroke-linejoin: round; stroke-linecap: round; }</style>
           ${links.join('')}
         </svg>
         ${rows.map(lv => `<div class="org-tree-level-label" style="top:${rowTop[lv] + CARD_H / 2}px">${LEVEL_LABEL[lv]}</div>`).join('')}
@@ -243,8 +258,29 @@ async function loadAchievementBadge(userId) {
 }
 
 // ============================================================================
-// Modal: ดู + (ถ้า ADMIN) แก้ไข เป้าหมาย/ทีเด็ด/Scoreboard ของบุคคล
+// Modal: ดู + (ถ้ามีสิทธิ์) แก้ไข เป้าหมาย/ทีเด็ด/Scoreboard ของบุคคล
+//
+// สิทธิ์แก้ไข (canEdit) ตอนนี้ไม่ได้จำกัดแค่ ADMIN หรือ "ลูกน้องสายตรง" อีกต่อไป —
+// หัวหน้างาน (SUPERVISOR) แก้ไขได้เพิ่มสำหรับ "ใครก็ตามที่แผนกเดียวกัน และมีระดับ
+// (org_level) ต่ำกว่าตัวเอง" ด้วย แม้จะไม่ได้อยู่ในสายบังคับบัญชาตรงก็ตาม — ต้อง
+// ตรงกับ _same_dept_higher_level() ฝั่ง backend เป๊ะ (ดู sql/patch_003_*.sql)
+// มิฉะนั้นปุ่มจะกดได้แต่ backend จะ FORBIDDEN
 // ============================================================================
+function deptsOverlap(deptA, deptB) {
+  const a = (deptA || '').split(',').map(s => s.trim()).filter(Boolean);
+  const b = (deptB || '').split(',').map(s => s.trim()).filter(Boolean);
+  return a.some(x => b.includes(x));
+}
+function canManagePerson(person) {
+  if (!person) return false;
+  if (currentUser.role === 'ADMIN') return true;
+  if (currentUser.user_id === person.user_id) return true;
+  if (currentUser.role !== 'SUPERVISOR') return false;
+  if (subordinateIds.has(person.user_id)) return true; // สายบังคับบัญชาตรง (เดิม)
+  // สิทธิ์ใหม่: แผนกเดียวกัน + ระดับสูงกว่า
+  return currentUser.org_level > person.org_level && deptsOverlap(currentUser.department, person.department);
+}
+
 async function openPersonModal(userId) {
   const person = byId.get(userId);
   const backdrop = openModal(`<div class="loading-page"><span class="spinner"></span></div>`);
@@ -266,7 +302,7 @@ async function refreshPersonModal(backdrop, userId, person) {
     return;
   }
 
-  const canEdit = currentUser.role === 'ADMIN';
+  const canEdit = canManagePerson(person);
   const canDelete = userId !== currentUser.user_id &&
     (currentUser.role === 'ADMIN' || (currentUser.role === 'SUPERVISOR' && subordinateIds.has(userId)));
 
@@ -311,6 +347,7 @@ async function refreshPersonModal(backdrop, userId, person) {
       </div>
       <div class="flex gap-8">
         ${canDelete ? `<button class="btn btn-sm btn-danger" id="delete-person-btn">🗑️ ลบพนักงาน</button>` : ''}
+        ${canEdit ? `<button class="btn btn-sm" id="import-goals-btn">📋 นำเข้าจาก Excel</button>` : ''}
         ${canEdit ? `<button class="btn btn-primary btn-sm" id="add-goal-btn">+ เพิ่มเป้าหมาย</button>` : ''}
       </div>
     </div>
@@ -339,6 +376,7 @@ async function refreshPersonModal(backdrop, userId, person) {
   }
   if (canEdit) {
     backdrop.querySelector('#add-goal-btn').onclick = () => openGoalEditModal(null, userId, backdrop);
+    backdrop.querySelector('#import-goals-btn').onclick = () => openPersonGoalsImportModal(userId, goals, person, backdrop);
     backdrop.querySelectorAll('[data-edit-goal]').forEach(b => b.onclick = () => openGoalEditModal(goals.find(g => g.goal_id == b.dataset.editGoal), userId, backdrop));
     backdrop.querySelectorAll('[data-del-goal]').forEach(b => b.onclick = async () => {
       if (!(await confirmDialog('ลบเป้าหมายนี้ใช่หรือไม่? ทีเด็ดภายใต้เป้าหมายนี้จะถูกลบไปด้วย'))) return;
@@ -359,6 +397,48 @@ async function refreshPersonModal(backdrop, userId, person) {
       catch (err) { toast(err.message, 'error'); }
     });
   }
+}
+
+function openPersonGoalsImportModal(userId, goals, person, backdrop) {
+  const headers = ['ชื่อเป้าหมาย', 'หน่วยวัด', 'ค่าเป้าหมาย', 'น้ำหนัก(%)', 'เงื่อนไข(>,>=,<,<=,=)'];
+  const blankRows = goals.map(g => [
+    g.goal_title, g.metric_unit || '', g.target_value ?? '', g.weight_percentage ?? '',
+    OPERATOR_SYMBOL[g.evaluation_operator] || '≥',
+  ]);
+  openPasteImportModal({
+    title: `📋 นำเข้าเป้าหมายให้ ${esc(person.first_name)} ${esc(person.last_name)}`,
+    instructions: `นำเข้าเป้าหมายปี ${CURRENT_YEAR_CE + 543} — ถ้าชื่อเป้าหมายตรงกับที่มีอยู่แล้วจะอัปเดตทับ ถ้าไม่มีจะสร้างใหม่ให้อัตโนมัติ`,
+    headers, blankRows, filename: `goals_${person.emp_code || userId}.csv`,
+    onImport: async (rows) => {
+      let ok = 0, fail = 0;
+      for (const r of rows) {
+        const [title, unit, target, weight, opRaw] = r;
+        if (!title || !title.trim()) continue;
+        const existing = goals.find(g => g.goal_title.trim() === title.trim());
+        try {
+          await api.upsertGoal({
+            goal_id: existing?.goal_id ?? null, target_user_id: userId,
+            goal_title: title.trim(), metric_unit: (unit || '').trim(),
+            target_value: numOrNull(target), weight_percentage: numOrNull(weight),
+            evaluation_operator: parseOperatorInput(opRaw),
+            year: CURRENT_YEAR_CE, parent_goal_id: existing?.parent_goal_id ?? null,
+          });
+          ok++;
+        } catch { fail++; }
+      }
+      await refreshPersonModal(backdrop, userId, byId.get(userId));
+      return { ok, fail, total: rows.length };
+    },
+  });
+}
+
+// รับได้ทั้งสัญลักษณ์ (>, >=, ≥, <, <=, ≤, =) และคำไทยเต็ม (จาก OPERATOR_LABEL_TH)
+function parseOperatorInput(raw) {
+  const s = (raw || '').trim();
+  const symMap = { '>': 'GT', '>=': 'GTE', '≥': 'GTE', '<': 'LT', '<=': 'LTE', '≤': 'LTE', '=': 'EQ' };
+  if (symMap[s]) return symMap[s];
+  const found = Object.entries(OPERATOR_LABEL_TH).find(([, label]) => label === s);
+  return found ? found[0] : 'GTE';
 }
 
 async function deletePerson(userId, person, backdrop) {

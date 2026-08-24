@@ -1,6 +1,7 @@
 import { api } from '../api.js';
 import { toast, statusPill, approvalPill, MONTHS_TH, OPERATOR_SYMBOL, escapeHtml as esc } from '../ui.js';
 import { CURRENT_YEAR_CE } from '../config.js';
+import { openPasteImportModal } from '../pasteImport.js';
 
 let ctx, viewingUserId, subordinates = [], selectedMonth, scoreData = [], goalMeta = new Map();
 
@@ -21,7 +22,10 @@ export async function render(container, context) {
           ${subordinates.map(s => `<option value="${s.user_id}">${esc(s.first_name)} ${esc(s.last_name)} — ${esc(s.position_title)}</option>`).join('')}
         </select>
       ` : '<div></div>'}
-      <button class="btn btn-primary" id="submit-month-btn">ส่งรายงานเดือนนี้ให้หัวหน้าอนุมัติ</button>
+      <div class="flex gap-8">
+        <button class="btn btn-sm" id="import-score-btn">📋 นำเข้าผลงานทั้งปีจาก Excel</button>
+        <button class="btn btn-primary" id="submit-month-btn">ส่งรายงานเดือนนี้ให้หัวหน้าอนุมัติ</button>
+      </div>
     </div>
 
     <div class="hint-box mb-16">
@@ -55,6 +59,7 @@ export async function render(container, context) {
   const viewerSelect = document.getElementById('viewer-select');
   if (viewerSelect) viewerSelect.onchange = async (e) => { viewingUserId = Number(e.target.value); await loadData(); };
   document.getElementById('submit-month-btn').onclick = submitMonth;
+  document.getElementById('import-score-btn').onclick = () => openScoreboardImportModal();
 
   await loadData();
 }
@@ -120,6 +125,40 @@ function renderTable() {
   </div>`;
 
   document.getElementById('save-month-btn').onclick = saveMonth;
+}
+
+function openScoreboardImportModal() {
+  const goals = [...goalMeta.values()];
+  if (!goals.length) { toast('ยังไม่มีเป้าหมายในปีนี้ กรุณาไปที่หน้า "เป้าหมาย & ทีเด็ด" ก่อน', 'error'); return; }
+  const editableGoals = goals.filter(g => !g.is_shared); // ถือเป้าร่วม แก้จากที่นี่ไม่ได้ (อ่านอย่างเดียว)
+  const headers = ['ชื่อเป้าหมาย', ...MONTHS_TH];
+  const blankRows = editableGoals.map(g => [g.goal_title, ...Array(12).fill('')]);
+  openPasteImportModal({
+    title: '📋 นำเข้าผลงานจริงทั้งปีจาก Excel / Google Sheet',
+    instructions: `นำเข้าผลงานจริงของ "${viewingUserId === ctx.user.user_id ? 'ตัวเอง' : 'ลูกน้องที่กำลังดูอยู่'}" ปี ${CURRENT_YEAR_CE + 543} — กรอกได้ทั้ง 12 เดือนพร้อมกัน คอลัมน์ที่เว้นว่างไว้จะไม่ถูกแตะต้อง (ค่าเดิมยังอยู่)`,
+    headers, blankRows, filename: 'scoreboard_template.csv',
+    onImport: async (rows) => {
+      let ok = 0, fail = 0, skip = 0;
+      for (const r of rows) {
+        const [title, ...monthVals] = r;
+        if (!title || !title.trim()) continue;
+        const g = editableGoals.find(g => g.goal_title.trim() === title.trim());
+        if (!g) { skip++; continue; }
+        for (let i = 0; i < 12; i++) {
+          const v = (monthVals[i] || '').trim();
+          if (v === '') continue;
+          const n = Number(v);
+          if (Number.isNaN(n)) { fail++; continue; }
+          try {
+            await api.upsertScoreboard({ goal_id: g.goal_id, month_num: i + 1, actual_val: n });
+            ok++;
+          } catch { fail++; }
+        }
+      }
+      await loadData();
+      return { ok, fail, skip };
+    },
+  });
 }
 
 async function saveMonth() {

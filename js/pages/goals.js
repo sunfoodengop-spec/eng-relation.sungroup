@@ -1,6 +1,7 @@
 import { api } from '../api.js';
 import { toast, openModal, closeModal, confirmDialog, escapeHtml as esc, OPERATOR_SYMBOL, OPERATOR_LABEL_TH } from '../ui.js';
 import { CURRENT_YEAR_CE } from '../config.js';
+import { openPasteImportModal } from '../pasteImport.js';
 
 let ctx; // { user }
 let viewingUserId;
@@ -25,7 +26,11 @@ export async function render(container, context) {
           </select>
         ` : ''}
       </div>
-      <button class="btn btn-primary" id="add-goal-btn">+ เพิ่มเป้าหมาย</button>
+      <div class="flex gap-8">
+        <button class="btn btn-sm" id="import-goals-btn">📋 นำเข้าเป้าหมาย</button>
+        <button class="btn btn-sm" id="import-tactics-btn">📋 นำเข้าทีเด็ด</button>
+        <button class="btn btn-primary" id="add-goal-btn">+ เพิ่มเป้าหมาย</button>
+      </div>
     </div>
 
     <div id="goals-list"></div>
@@ -42,6 +47,8 @@ export async function render(container, context) {
   `;
 
   document.getElementById('add-goal-btn').onclick = () => openGoalModal(null);
+  document.getElementById('import-goals-btn').onclick = () => openGoalsImportModal();
+  document.getElementById('import-tactics-btn').onclick = () => openTacticsImportModal();
   const viewerSelect = document.getElementById('viewer-select');
   if (viewerSelect) viewerSelect.onchange = async (e) => {
     viewingUserId = Number(e.target.value);
@@ -179,6 +186,78 @@ function openTacticModal(goalId, tactic) {
       await loadGoals(document);
     } catch (err) { toast(err.message, 'error'); }
   };
+}
+
+function openGoalsImportModal() {
+  const headers = ['ชื่อเป้าหมาย', 'หน่วยวัด', 'ค่าเป้าหมาย', 'น้ำหนัก(%)', 'เงื่อนไข(>,>=,<,<=,=)'];
+  const blankRows = currentGoals.map(g => [
+    g.goal_title, g.metric_unit || '', g.target_value ?? '', g.weight_percentage ?? '',
+    OPERATOR_SYMBOL[g.evaluation_operator] || '≥',
+  ]);
+  openPasteImportModal({
+    title: '📋 นำเข้าเป้าหมายจาก Excel / Google Sheet',
+    instructions: `นำเข้าให้ "${viewingUserId === ctx.user.user_id ? 'ตัวเอง' : 'ลูกน้องที่กำลังดูอยู่'}" ปี ${CURRENT_YEAR_CE + 543} — ถ้าชื่อเป้าหมายตรงกับที่มีอยู่แล้วจะอัปเดตทับ ถ้าไม่มีจะสร้างใหม่ให้อัตโนมัติ`,
+    headers, blankRows, filename: 'goals_template.csv',
+    onImport: async (rows) => {
+      let ok = 0, fail = 0;
+      for (const r of rows) {
+        const [title, unit, target, weight, opRaw] = r;
+        if (!title || !title.trim()) continue;
+        const existing = currentGoals.find(g => g.goal_title.trim() === title.trim());
+        try {
+          await api.upsertGoal({
+            goal_id: existing?.goal_id ?? null, target_user_id: viewingUserId,
+            goal_title: title.trim(), metric_unit: (unit || '').trim(),
+            target_value: numOrNull(target), weight_percentage: numOrNull(weight),
+            evaluation_operator: parseOperatorInput(opRaw),
+            year: CURRENT_YEAR_CE, parent_goal_id: existing?.parent_goal_id ?? null,
+          });
+          ok++;
+        } catch { fail++; }
+      }
+      await loadGoals(document);
+      return { ok, fail, total: rows.length };
+    },
+  });
+}
+
+function openTacticsImportModal() {
+  if (!currentGoals.length) { toast('กรุณาเพิ่มเป้าหมายอย่างน้อย 1 รายการก่อนนำเข้าทีเด็ด', 'error'); return; }
+  const headers = ['ชื่อเป้าหมายที่แนบ', 'ชื่อทีเด็ด', 'แผนปฏิบัติการ'];
+  const blankRows = currentGoals.filter(g => !g.is_shared).map(g => [g.goal_title, '', '']);
+  openPasteImportModal({
+    title: '📋 นำเข้าทีเด็ดจาก Excel / Google Sheet',
+    instructions: 'คอลัมน์แรกต้องพิมพ์ชื่อเป้าหมายให้ตรงกับที่มีอยู่แล้วเป๊ะๆ (ระบบจะจับคู่ให้อัตโนมัติ) แถวที่ไม่พบเป้าหมายที่ตรงกันจะถูกข้าม',
+    headers, blankRows, filename: 'tactics_template.csv',
+    onImport: async (rows) => {
+      let ok = 0, fail = 0, skip = 0;
+      for (const r of rows) {
+        const [goalTitle, tacticTitle, desc] = r;
+        if (!tacticTitle || !tacticTitle.trim()) continue;
+        const g = currentGoals.find(g => g.goal_title.trim() === (goalTitle || '').trim());
+        if (!g) { skip++; continue; }
+        try {
+          await api.upsertTactic({
+            tactic_id: null, goal_id: g.goal_id,
+            tactic_title: tacticTitle.trim(), action_plan_description: (desc || '').trim(),
+          });
+          ok++;
+        } catch { fail++; }
+      }
+      await loadGoals(document);
+      return { ok, fail, skip, total: rows.length };
+    },
+  });
+}
+
+// รับได้ทั้งสัญลักษณ์ (>, >=, ≥, <, <=, ≤, =) และคำไทยเต็ม (จาก OPERATOR_LABEL_TH)
+// ถ้าอ่านไม่ออก/เว้นว่าง ใช้ "มากกว่าหรือเท่ากับ" (GTE) เป็นค่าเริ่มต้น
+function parseOperatorInput(raw) {
+  const s = (raw || '').trim();
+  const symMap = { '>': 'GT', '>=': 'GTE', '≥': 'GTE', '<': 'LT', '<=': 'LTE', '≤': 'LTE', '=': 'EQ' };
+  if (symMap[s]) return symMap[s];
+  const found = Object.entries(OPERATOR_LABEL_TH).find(([, label]) => label === s);
+  return found ? found[0] : 'GTE';
 }
 
 async function deleteGoal(goalId, container) {

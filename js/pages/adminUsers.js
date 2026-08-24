@@ -7,6 +7,12 @@ const ROLE_LABEL = { STAFF: 'เจ้าหน้าที่', SUPERVISOR: '�
 let allUsers = [];
 let allDepartments = []; // { department_id, dept_key, label, sort_order }
 
+function deptLabelsOf(dept) {
+  const keys = (dept || '').split(',').map(s => s.trim()).filter(Boolean);
+  if (!keys.length) return '-';
+  return esc(keys.map(k => allDepartments.find(d => d.dept_key === k)?.label || k).join(' · '));
+}
+
 export async function render(container, { user }) {
   if (user.role !== 'ADMIN') {
     container.innerHTML = `<div class="card"><div class="empty-state"><div class="icon">🔒</div>หน้านี้สำหรับผู้ดูแลระบบเท่านั้น</div></div>`;
@@ -15,16 +21,27 @@ export async function render(container, { user }) {
 
   container.innerHTML = `
     <div class="flex-between mb-16">
-      <input id="search-box" placeholder="ค้นหาชื่อ, รหัสพนักงาน, ตำแหน่ง..." style="width:320px">
+      <div class="flex gap-8">
+        <input id="search-box" placeholder="ค้นหาชื่อ, รหัสพนักงาน, ตำแหน่ง..." style="width:280px">
+        <select id="dept-filter" style="width:180px"><option value="">ทุกแผนก</option></select>
+      </div>
       <button class="btn btn-primary" id="add-user-btn">+ เพิ่มพนักงาน</button>
     </div>
     <div class="card"><div id="users-table"></div></div>
   `;
 
   document.getElementById('add-user-btn').onclick = () => openUserModal(null, container);
-  document.getElementById('search-box').oninput = (e) => renderTable(e.target.value.trim());
+  document.getElementById('search-box').oninput = () => renderTable(currentFilters());
+  document.getElementById('dept-filter').onchange = () => renderTable(currentFilters());
 
   await load(container);
+}
+
+function currentFilters() {
+  return {
+    text: document.getElementById('search-box').value.trim(),
+    dept: document.getElementById('dept-filter').value,
+  };
 }
 
 async function load(container) {
@@ -33,17 +50,26 @@ async function load(container) {
     api.getSubordinates(), // ADMIN role returns everyone
     api.listDepartments(),
   ]);
-  renderTable('');
+  const deptFilter = document.getElementById('dept-filter');
+  const prevSelected = deptFilter.value;
+  deptFilter.innerHTML = '<option value="">ทุกแผนก</option>' +
+    allDepartments.map(d => `<option value="${esc(d.dept_key)}">${esc(d.label)}</option>`).join('');
+  deptFilter.value = prevSelected; // คงตัวกรองเดิมไว้ถ้าเพิ่งบันทึก/แก้ไขพนักงานแล้วโหลดใหม่
+  renderTable(currentFilters());
 }
 
-function renderTable(filter) {
+function renderTable({ text, dept }) {
   const wrap = document.getElementById('users-table');
-  const f = filter.toLowerCase();
-  const rows = allUsers.filter(u =>
-    !f || `${u.first_name} ${u.last_name} ${u.emp_code} ${u.position_title}`.toLowerCase().includes(f));
+  const f = (text || '').toLowerCase();
+  const rows = allUsers.filter(u => {
+    const matchesText = !f || `${u.first_name} ${u.last_name} ${u.emp_code} ${u.position_title}`.toLowerCase().includes(f);
+    const userDepts = (u.department || '').split(',').map(s => s.trim());
+    const matchesDept = !dept || userDepts.includes(dept);
+    return matchesText && matchesDept;
+  });
 
   if (!rows.length) {
-    wrap.innerHTML = `<div class="empty-state"><div class="icon">👥</div>ไม่พบพนักงานที่ตรงกับคำค้นหา</div>`;
+    wrap.innerHTML = `<div class="empty-state"><div class="icon">👥</div>ไม่พบพนักงานที่ตรงกับตัวกรอง</div>`;
     return;
   }
 
@@ -55,7 +81,7 @@ function renderTable(filter) {
         <td class="text-muted">${esc(u.emp_code)}</td>
         <td>${esc(u.first_name)} ${esc(u.last_name)} ${u.nickname ? `<span class="text-dim">(${esc(u.nickname)})</span>` : ''}</td>
         <td>${esc(u.position_title)}</td>
-        <td class="text-muted">${esc(u.department || '-')}</td>
+        <td class="text-muted">${deptLabelsOf(u.department)}</td>
         <td>${LEVEL_LABEL[u.org_level] || u.org_level}</td>
         <td><span class="role-badge">${ROLE_LABEL[u.role] || u.role}</span></td>
         <td class="text-muted">${supervisorName(u.supervisor_id)}</td>

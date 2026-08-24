@@ -1,5 +1,6 @@
 import { requireLoginOrRedirect, getUser, clearSession } from './session.js';
 import { initials } from './ui.js';
+import { themeToggleButtonHtml, wireThemeToggleButton } from './theme.js';
 
 if (!requireLoginOrRedirect()) {
   throw new Error('redirecting to login');
@@ -16,10 +17,12 @@ const PAGE_TITLES = {
 
 // ---- Topbar user ----------------------------------------------------------
 document.getElementById('topbar-user').innerHTML = `
+  ${themeToggleButtonHtml()}
   <span>${user.first_name} ${user.last_name} <span class="role-badge">${ROLE_LABEL[user.role] || user.role}</span></span>
   <div class="avatar">${initials(user.first_name, user.last_name)}</div>
   <button class="btn btn-sm" id="logout-btn">ออกจากระบบ</button>
 `;
+wireThemeToggleButton(document.getElementById('topbar-user'));
 document.getElementById('logout-btn').onclick = () => {
   clearSession();
   window.location.href = './login.html';

@@ -1,5 +1,9 @@
 import { api } from './api.js';
 import { saveSession, isLoggedIn, getUser } from './session.js';
+import { themeToggleButtonHtml, wireThemeToggleButton } from './theme.js';
+
+document.getElementById('theme-toggle-slot').innerHTML = themeToggleButtonHtml();
+wireThemeToggleButton(document);
 
 if (isLoggedIn() && !getUser()?.is_first_login) {
   window.location.href = './app.html';

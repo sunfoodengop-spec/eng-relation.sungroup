@@ -34,6 +34,31 @@
   --shadow: 0 8px 24px rgba(0,0,0,.35);
 }
 
+/* โหมดสว่าง — โทนสบายตา เป็นทางการ (พื้นขาว/เทาอ่อน ตัวหนังสือกรมท่าเข้ม) */
+html[data-theme="light"] {
+  --bg:        #F3F5FA;
+  --bg-panel:  #FFFFFF;
+  --bg-panel-2:#EEF1F8;
+  --bg-hover:  #E4E9F5;
+  --border:    #DBE1EF;
+  --text:      #1B2340;
+  --text-muted:#5B6683;
+  --text-dim:  #8891AC;
+
+  --accent:    #3654D6;
+  --accent-dim:#C6D0F7;
+  --green:     #1C9A57;
+  --green-bg:  rgba(28,154,87,.12);
+  --amber:     #B6790C;
+  --amber-bg:  rgba(182,121,12,.12);
+  --red:       #C93A41;
+  --red-bg:    rgba(201,58,65,.12);
+
+  --shadow: 0 6px 18px rgba(30,40,80,.08);
+}
+html[data-theme="light"] .topbar { background: rgba(243,245,250,.85); }
+html[data-theme="light"] ::selection { background: var(--accent-dim); color: var(--text); }
+
 * { box-sizing: border-box; }
 html, body { height: 100%; }
 body {
@@ -160,6 +185,7 @@ a { color: var(--accent); text-decoration: none; }
 .btn-danger { background: var(--red-bg); border-color: var(--red); color: var(--red); }
 .btn-ghost { background: transparent; border-color: transparent; color: var(--text-muted); }
 .btn-sm { padding: 6px 11px; font-size: 13px; }
+.btn-icon { padding: 6px 10px; font-size: 16px; line-height: 1; }
 .btn:disabled { opacity: .5; cursor: not-allowed; }
 
 /* Forms */
@@ -183,7 +209,7 @@ tr.clickable:hover { background: var(--bg-hover); cursor: pointer; }
 
 /* Login page */
 .login-wrap { min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 20px; }
-.login-card { width: 380px; }
+.login-card { width: 380px; position: relative; }
 .login-logo { text-align: center; margin-bottom: 22px; }
 .login-logo .mark { font-family: var(--font-display); font-weight: 700; font-size: 22px; }
 .login-logo .tag { font-size: 13px; color: var(--text-muted); margin-top: 4px; }

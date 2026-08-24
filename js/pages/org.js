@@ -6,46 +6,38 @@ const LEVELS = [80, 75, 65, 55, 40]; // บนสุด -> ล่างสุด
 const LEVEL_LABEL = { 95: 'ผู้บริหาร', 85: 'GM', 75: 'ผจก.ฝ่าย', 65: 'ผจก.ส่วน', 55: 'ผจก.แผนก', 40: 'จนท.' };
 const TOP_LEVEL_THRESHOLD = 80; // ระดับตั้งแต่นี้ขึ้นไปไม่มีแผนก จะวาดเป็นแถวคานกลางเหนือ Matrix
 
-// ⚠️ CUSTOMIZE PER PROJECT: จัดกลุ่มแผนกย่อยเข้าเป็นสายงานหลักตาม Org Chart
-// ที่ได้รับมา — แก้ไข key/label/match ให้ตรงกับฝ่ายจริงของบริษัทนี้
-// (ดูวิธีแปลง Org Chart เป็นค่านี้ใน references/org_chart_parsing.md ของ Skill)
-//
-// ลำดับคอลัมน์ (ซ้าย->ขวา) ยืนยันแล้ว: LMN1 | LMN2 | RD | OP | SRN | ENF |
-// Prod_SRN | พลังงาน | ASRS — คนที่คุมมากกว่า 1 แผนก (เช่น อัษฎาวุธ คุม OP+SRN+ENF,
-// เพียว คุม OP+SRN, บั๊กโจ้ คุม พลังงาน+ASRS) ต้องมีแผนกที่ตัวเองคุมเรียงติดกัน
-// ในลำดับนี้เสมอ ไม่งั้นการ "วาง Block ตรงกลาง" จะดูผิดเพี้ยน
-const DEPT_GROUPS = [
-  { key: 'LMN1', label: 'LMN1', match: ['LMN1'] },
-  { key: 'LMN2', label: 'LMN2', match: ['LMN2'] },
-  { key: 'RD', label: 'RD', match: ['RD'] },
-  { key: 'OP', label: 'OP', match: ['OP'] },
-  { key: 'SRN', label: 'SRN', match: ['SRN'] },
-  { key: 'ENF', label: 'ENF', match: ['ENF'] },
-  { key: 'PROD_SRN', label: 'Prod SRN', match: ['Prod SRN'] },
-  { key: 'ENE', label: 'พลังงาน', match: ['พลังงาน'] },
-  { key: 'ASRS', label: 'ASRS', match: ['ASRS'] },
-  // key ควรสั้นไม่มีช่องว่าง, match คือ department string ทุกค่าที่พบใน
-  // seed_org.sql ที่ควรถูกจัดเข้ากลุ่มคอลัมน์นี้
-];
-function groupOf(dept) {
-  if (!dept) return null;
-  const g = DEPT_GROUPS.find(g => g.match.includes(dept));
-  return g ? g.key : 'อื่นๆ';
-}
-// คนที่คุมมากกว่า 1 แผนก: department ใน seed SQL ใส่เป็น raw tag คั่นด้วย comma
-// เช่น 'OP,SRN,ENF' — deptKeysOf คืนค่าเป็น array ของ column key ทั้งหมดที่ match
-// (ความยาว > 1 = ต้องวาง Block ตรงกลางคร่อมทุกคอลัมน์ที่ match, ดู renderMatrixRow)
+// รายชื่อแผนก (คอลัมน์ผังองค์กร) ไม่ hardcode อีกต่อไป — โหลดจาก
+// api.listDepartments() ทุกครั้งที่ render (ดูตาราง `departments` ใน
+// sql/patch_001_departments.sql) Admin เพิ่ม/แก้ชื่อแผนกได้จากหน้า "จัดการผู้ใช้"
+let departments = []; // { key, label } เรียงตาม sort_order แล้วจาก RPC
+
+// คนที่คุมมากกว่า 1 แผนก: department ใน DB เก็บเป็น raw tag คั่นด้วย comma
+// เช่น 'OP,SRN,ENF' — deptKeysOf คืนค่าเป็น array ของ dept key ทั้งหมดที่ match
+// (ความยาว > 1 = ต้องวาง Block ตรงกลางคร่อมทุกคอลัมน์ที่คุม)
 function deptKeysOf(dept) {
   if (!dept) return [];
-  return dept.split(',').map(s => s.trim()).filter(Boolean).map(tag => {
-    const g = DEPT_GROUPS.find(g => g.match.includes(tag));
-    return g ? g.key : 'อื่นๆ';
-  });
+  return dept.split(',').map(s => s.trim()).filter(Boolean)
+    .map(tag => (departments.some(d => d.key === tag) ? tag : 'อื่นๆ'));
+}
+// สายผู้ชำนาญการ/ผู้เชี่ยวชาญ: ตรวจจากคำในตำแหน่ง — เยื้องขวาออกจากสายบังคับบัญชา
+// หลัก + กรอบเส้นประ (ดู requirement ล่าสุด)
+function isSpecialist(p) {
+  const t = p.position_title || '';
+  return t.includes('ผู้เชี่ยวชาญ') || t.includes('ผู้ชำนาญการ');
+}
+function sortByEmpCode(list) {
+  return [...list].sort((a, b) => (a.emp_code || '').localeCompare(b.emp_code || '', undefined, { numeric: true }));
 }
 
 // ---- Layout constants (px) -------------------------------------------------
-const CARD_W = 172, CARD_H = 62, CARD_GAP_Y = 12, COL_GAP = 30, ROW_GAP = 60;
+const CARD_W = 172, CARD_H = 62, CARD_GAP_X = 10, COL_GAP = 40, ROW_GAP = 60, SPECIALIST_GAP = 20;
 const HEADER_H = 30, TOP_MARGIN = 16, LEFT_MARGIN = 70;
+// สีพื้นหลังแยกแต่ละคอลัมน์แผนก (วนซ้ำถ้าแผนกเยอะกว่าจำนวนสี)
+const COL_BG_PALETTE = [
+  'rgba(99,102,241,.10)', 'rgba(16,185,129,.10)', 'rgba(245,158,11,.10)',
+  'rgba(236,72,153,.10)', 'rgba(14,165,233,.10)', 'rgba(168,85,247,.10)',
+  'rgba(239,68,68,.10)', 'rgba(20,184,166,.10)', 'rgba(234,179,8,.10)',
+];
 
 let allPeople = [];
 let byId = new Map();
@@ -58,7 +50,10 @@ export async function render(container, ctx) {
   lastContainer = container;
   container.innerHTML = `<div class="loading-page"><span class="spinner"></span></div>`;
 
-  allPeople = await api.getOrgChart();
+  const [orgChart, depts] = await Promise.all([api.getOrgChart(), api.listDepartments()]);
+  allPeople = orgChart;
+  departments = depts.map(d => ({ key: d.dept_key, label: d.label }));
+
   if (!allPeople.length) {
     container.innerHTML = `<div class="card"><div class="empty-state"><div class="icon">🕸️</div>ไม่มีข้อมูลผังองค์กรที่คุณมีสิทธิ์เห็น</div></div>`;
     return;
@@ -73,43 +68,50 @@ export async function render(container, ctx) {
   const topPeople = allPeople.filter(p => p.org_level >= TOP_LEVEL_THRESHOLD);
   const rest = allPeople.filter(p => p.org_level < TOP_LEVEL_THRESHOLD);
   const topLevelsPresent = [...new Set(topPeople.map(p => p.org_level))].sort((a, b) => b - a);
-
-  const columns = DEPT_GROUPS.filter(g => rest.some(p => deptKeysOf(p.department).includes(g.key)));
-  if (rest.some(p => deptKeysOf(p.department).length === 1 && deptKeysOf(p.department)[0] === 'อื่นๆ')) columns.push({ key: 'อื่นๆ', label: 'อื่นๆ' });
-
   const rows = LEVELS.filter(lv => lv < TOP_LEVEL_THRESHOLD);
 
-  // แยกคนธรรมดา (อยู่คอลัมน์เดียว) กับคนที่คุมมากกว่า 1 แผนก (span หลายคอลัมน์)
-  const singlePeople = rest.filter(p => deptKeysOf(p.department).length <= 1);
+  // แยกคน 3 กลุ่ม:
+  //  - spanPeople: คุมมากกว่า 1 แผนก -> วาง Block ตรงกลางคร่อมทุกคอลัมน์ที่คุม
+  //  - specialistPeople: ตำแหน่งผู้เชี่ยวชาญ/ผู้ชำนาญการ (แผนกเดียว) -> เยื้องขวา เส้นประ
+  //  - mainPeople: สายบังคับบัญชาปกติ (แผนกเดียว) -> เรียงแนวนอนในแถวเดียวกันตาม emp_code
   const spanPeople = rest.filter(p => deptKeysOf(p.department).length > 1);
+  const specialistPeople = rest.filter(p => deptKeysOf(p.department).length === 1 && isSpecialist(p));
+  const mainPeople = rest.filter(p => deptKeysOf(p.department).length === 1 && !isSpecialist(p));
 
-  // จำนวนคนมากสุดในแต่ละแถว (ทุกคอลัมน์รวมกัน) เพื่อกำหนดความสูงแถว
-  const cellPeople = {}; // `${level}|${colKey}` -> [people]
+  const columns = departments.filter(col => rest.some(p => deptKeysOf(p.department).includes(col.key)));
+  if (rest.some(p => deptKeysOf(p.department).includes('อื่นๆ'))) columns.push({ key: 'อื่นๆ', label: 'อื่นๆ' });
+
+  // จัดคนในแต่ละ (ระดับ, คอลัมน์) ให้เรียงแนวนอนตาม emp_code จากน้อย(ซ้าย)ไปมาก(ขวา)
+  // แยกเลนหลัก (mainCell) กับเลนผู้เชี่ยวชาญที่เยื้องออกไปทางขวา (specCell)
+  const mainCell = {}, specCell = {};
   rows.forEach(lv => columns.forEach(col => {
-    cellPeople[`${lv}|${col.key}`] = singlePeople.filter(p => p.org_level === lv && groupOf(p.department) === col.key);
+    mainCell[`${lv}|${col.key}`] = sortByEmpCode(mainPeople.filter(p => p.org_level === lv && deptKeysOf(p.department)[0] === col.key));
+    specCell[`${lv}|${col.key}`] = sortByEmpCode(specialistPeople.filter(p => p.org_level === lv && deptKeysOf(p.department)[0] === col.key));
   }));
-  const rowMaxCount = {};
-  rows.forEach(lv => {
-    rowMaxCount[lv] = Math.max(1, ...columns.map(col => cellPeople[`${lv}|${col.key}`].length || 1));
+
+  // ความกว้างของแต่ละคอลัมน์ขึ้นกับจำนวนคนมากสุดที่ต้องเรียงแนวนอนในระดับใดระดับหนึ่ง
+  const mainFanout = {}, specFanout = {};
+  columns.forEach(col => {
+    mainFanout[col.key] = Math.max(1, ...rows.map(lv => mainCell[`${lv}|${col.key}`].length || 1));
+    specFanout[col.key] = Math.max(0, ...rows.map(lv => specCell[`${lv}|${col.key}`].length));
   });
-  // คนที่ span หลายคอลัมน์ต้องการอย่างน้อย 1 แถวเพิ่ม ต่อจากคนที่อยู่คอลัมน์เดียว
-  // ที่ทับซ้อนช่วงคอลัมน์เดียวกันอยู่แล้ว (ปกติจะไม่ทับซ้อน แต่กันไว้เผื่อ)
-  const spanIdxByPerson = new Map();
-  rows.forEach(lv => {
-    spanPeople.filter(p => p.org_level === lv).forEach(p => {
-      const keys = deptKeysOf(p.department).filter(k => columns.some(c => c.key === k));
-      const idx = Math.max(0, ...keys.map(k => (cellPeople[`${lv}|${k}`] || []).length));
-      spanIdxByPerson.set(p.user_id, idx);
-      rowMaxCount[lv] = Math.max(rowMaxCount[lv], idx + 1);
-    });
+  const mainW = {}, specW = {}, colTotalW = {};
+  columns.forEach(col => {
+    mainW[col.key] = mainFanout[col.key] * CARD_W + (mainFanout[col.key] - 1) * CARD_GAP_X;
+    specW[col.key] = specFanout[col.key] > 0 ? specFanout[col.key] * CARD_W + (specFanout[col.key] - 1) * CARD_GAP_X : 0;
+    colTotalW[col.key] = mainW[col.key] + (specFanout[col.key] > 0 ? SPECIALIST_GAP + specW[col.key] : 0);
   });
 
-  const colX = {};
-  columns.forEach((col, i) => { colX[col.key] = LEFT_MARGIN + i * (CARD_W + COL_GAP) + CARD_W / 2; });
-  const totalWidth = Math.max(
-    LEFT_MARGIN + columns.length * (CARD_W + COL_GAP) - COL_GAP + 30,
-    CARD_W + 60
-  );
+  const colLeftX = {}, mainLeftX = {}, specLeftX = {}, colCenterX = {};
+  let cursorX = LEFT_MARGIN;
+  columns.forEach(col => {
+    colLeftX[col.key] = cursorX;
+    mainLeftX[col.key] = cursorX;
+    specLeftX[col.key] = cursorX + mainW[col.key] + SPECIALIST_GAP;
+    colCenterX[col.key] = cursorX + colTotalW[col.key] / 2;
+    cursorX += colTotalW[col.key] + COL_GAP;
+  });
+  const totalWidth = Math.max(cursorX - COL_GAP + 30, CARD_W + 60);
   const centerX = totalWidth / 2;
 
   const nodePos = new Map(); // user_id -> {x, y}
@@ -125,29 +127,30 @@ export async function render(container, ctx) {
     y += CARD_H + ROW_GAP;
   });
 
-  // ---- แถว Matrix (ระดับ < 85 แบ่งตามสายงาน) --------------------------------
+  // ---- แถว Matrix (ระดับ < 80 แบ่งตามสายงาน, ระดับเดียวกันอยู่แถวเดียวกันเสมอ) ----
   y += HEADER_H;
   const colLabelY = y - HEADER_H;
   const rowTop = {};
   rows.forEach(lv => {
-    const rowH = rowMaxCount[lv] * (CARD_H + CARD_GAP_Y) - CARD_GAP_Y;
     rowTop[lv] = y;
+    const rowCenterY = y + CARD_H / 2;
     columns.forEach(col => {
-      const people = cellPeople[`${lv}|${col.key}`];
-      people.forEach((p, idx) => {
-        nodePos.set(p.user_id, { x: colX[col.key], y: y + idx * (CARD_H + CARD_GAP_Y) + CARD_H / 2 });
+      mainCell[`${lv}|${col.key}`].forEach((p, i) => {
+        nodePos.set(p.user_id, { x: mainLeftX[col.key] + i * (CARD_W + CARD_GAP_X) + CARD_W / 2, y: rowCenterY });
+      });
+      specCell[`${lv}|${col.key}`].forEach((p, i) => {
+        nodePos.set(p.user_id, { x: specLeftX[col.key] + i * (CARD_W + CARD_GAP_X) + CARD_W / 2, y: rowCenterY });
       });
     });
     // คนที่ span หลายคอลัมน์: วาง Block ไว้ตรงกลางของทุกคอลัมน์ที่ตัวเองคุม
     spanPeople.filter(p => p.org_level === lv).forEach(p => {
       const keys = deptKeysOf(p.department).filter(k => columns.some(c => c.key === k));
       if (!keys.length) return;
-      const xs = keys.map(k => colX[k]);
-      const centerXSpan = (Math.min(...xs) + Math.max(...xs)) / 2;
-      const idx = spanIdxByPerson.get(p.user_id) || 0;
-      nodePos.set(p.user_id, { x: centerXSpan, y: y + idx * (CARD_H + CARD_GAP_Y) + CARD_H / 2 });
+      const leftMost = Math.min(...keys.map(k => colLeftX[k]));
+      const rightMost = Math.max(...keys.map(k => colLeftX[k] + colTotalW[k]));
+      nodePos.set(p.user_id, { x: (leftMost + rightMost) / 2, y: rowCenterY });
     });
-    y += rowH + ROW_GAP;
+    y += CARD_H + ROW_GAP;
   });
   const totalHeight = y - ROW_GAP + 20;
 
@@ -162,28 +165,41 @@ export async function render(container, ctx) {
     links.push(`<path d="M ${from.x} ${from.y + CARD_H / 2} V ${midY} H ${to.x} V ${to.y - CARD_H / 2}" class="org-link" fill="none" />`);
   });
 
+  // ---- พื้นหลังแยกสีต่อคอลัมน์แผนก (ให้เห็นการแยกแผนกชัดเจน) -----------------
+  const bgTop = colLabelY - 4;
+  const bgHeight = totalHeight - bgTop - 6;
+  const colBgHtml = columns.map((col, i) => `
+    <div class="org-tree-col-bg" style="left:${colLeftX[col.key]}px;top:${bgTop}px;width:${colTotalW[col.key]}px;height:${bgHeight}px;background:${COL_BG_PALETTE[i % COL_BG_PALETTE.length]}"></div>
+  `).join('');
+
   container.innerHTML = `
     <div class="card mb-16" style="padding:10px 14px">
       <p class="text-muted" style="margin:0;font-size:13px">
         คลิกที่การ์ดพนักงานเพื่อดูเป้าหมาย/ทีเด็ด/Scoreboard ${currentUser.role === 'ADMIN' ? '· สิทธิ์ผู้ดูแลระบบสามารถเพิ่ม/แก้ไขเป้าหมาย ทีเด็ด และลบพนักงานได้จากหน้านี้' : '· ผู้บังคับบัญชาสามารถลบลูกน้องในสายงานของตนได้'}
+        · เส้นประ = สายผู้เชี่ยวชาญ/ผู้ชำนาญการ
       </p>
     </div>
     <div class="org-tree-wrap">
       <div class="org-tree-canvas" style="width:${totalWidth}px;height:${totalHeight}px">
-        ${columns.map(col => `<div class="org-tree-col-label" style="left:${colX[col.key]}px;top:${colLabelY}px;width:${CARD_W}px">${esc(col.label)}</div>`).join('')}
+        ${colBgHtml}
+        ${columns.map(col => `<div class="org-tree-col-label" style="left:${colCenterX[col.key]}px;top:${colLabelY}px;width:${colTotalW[col.key]}px">${esc(col.label)}</div>`).join('')}
         <svg class="org-tree-svg" width="${totalWidth}" height="${totalHeight}">
           <style>.org-link { stroke: var(--border); stroke-width: 1.6px; }</style>
           ${links.join('')}
         </svg>
-        ${rows.map(lv => `<div class="org-tree-level-label" style="top:${rowTop[lv] + (rowMaxCount[lv] * (CARD_H + CARD_GAP_Y) - CARD_GAP_Y) / 2}px">${LEVEL_LABEL[lv]}</div>`).join('')}
+        ${rows.map(lv => `<div class="org-tree-level-label" style="top:${rowTop[lv] + CARD_H / 2}px">${LEVEL_LABEL[lv]}</div>`).join('')}
         ${topPeople.map(p => nodeHtml(p, nodePos.get(p.user_id), true)).join('')}
-        ${singlePeople.map(p => {
+        ${mainPeople.map(p => {
           const pos = nodePos.get(p.user_id);
           return pos ? nodeHtml(p, pos, false) : '';
         }).join('')}
         ${spanPeople.map(p => {
           const pos = nodePos.get(p.user_id);
           return pos ? nodeHtml(p, pos, false, true) : '';
+        }).join('')}
+        ${specialistPeople.map(p => {
+          const pos = nodePos.get(p.user_id);
+          return pos ? nodeHtml(p, pos, false, false, true) : '';
         }).join('')}
       </div>
     </div>
@@ -196,9 +212,9 @@ export async function render(container, ctx) {
   allPeople.forEach(p => loadAchievementBadge(p.user_id));
 }
 
-function nodeHtml(p, pos, isTop, isSpan) {
+function nodeHtml(p, pos, isTop, isSpan, isSpecialistNode) {
   return `
-    <div class="org-tree-node ${isTop ? 'gm-node' : ''} ${isSpan ? 'span-node' : ''}" data-person="${p.user_id}" style="left:${pos.x}px;top:${pos.y}px">
+    <div class="org-tree-node ${isTop ? 'gm-node' : ''} ${isSpan ? 'span-node' : ''} ${isSpecialistNode ? 'specialist-node' : ''}" data-person="${p.user_id}" style="left:${pos.x}px;top:${pos.y}px">
       <div class="name">${p.org_level >= 95 ? '⭐ ' : p.org_level >= 85 ? '👑 ' : ''}${esc(p.first_name)} ${esc(p.last_name)}</div>
       <div class="pos">${esc(p.position_title || '')}</div>
       <div class="achv-row" id="achv-${p.user_id}">

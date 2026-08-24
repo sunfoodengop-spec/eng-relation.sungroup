@@ -13,6 +13,7 @@ const ERROR_MESSAGES = {
   GOAL_NOT_FOUND: 'ไม่พบเป้าหมายนี้',
   CANNOT_HOLD_OWN_GOAL: 'ไม่สามารถถือเป้าร่วมกับเป้าหมายของตัวเองได้',
   CANNOT_DELETE_SELF: 'ไม่สามารถลบบัญชีของตัวเองได้',
+  DEPARTMENT_KEY_EXISTS: 'มีรหัสแผนกนี้อยู่แล้ว กรุณาใช้ชื่ออื่น',
 };
 
 function friendlyError(err) {
@@ -54,6 +55,11 @@ export const api = {
   // Org
   getSubordinates: () => call('get_subordinates'),
   getOrgChart: () => call('get_org_chart'),
+  listDepartments: () => call('list_departments'),
+  upsertDepartment: (d) => call('upsert_department', {
+    p_department_id: d.department_id ?? null, p_dept_key: d.dept_key,
+    p_label: d.label, p_sort_order: d.sort_order ?? null,
+  }),
   upsertUser: (u) => call('upsert_user', {
     p_target_user_id: u.user_id ?? null, p_emp_code: u.emp_code, p_first_name: u.first_name,
     p_last_name: u.last_name, p_nickname: u.nickname ?? null, p_position_title: u.position_title,

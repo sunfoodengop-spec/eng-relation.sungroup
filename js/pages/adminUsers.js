@@ -5,6 +5,7 @@ const LEVEL_LABEL = { 95: 'ผู้บริหาร', 85: 'ผู้จัด
 const ROLE_LABEL = { STAFF: 'เจ้าหน้าที่', SUPERVISOR: 'หัวหน้างาน', ADMIN: 'ผู้ดูแลระบบ' };
 
 let allUsers = [];
+let allDepartments = []; // { department_id, dept_key, label, sort_order }
 
 export async function render(container, { user }) {
   if (user.role !== 'ADMIN') {
@@ -28,7 +29,10 @@ export async function render(container, { user }) {
 
 async function load(container) {
   document.getElementById('users-table').innerHTML = `<div class="loading-page"><span class="spinner"></span></div>`;
-  allUsers = await api.getSubordinates(); // ADMIN role returns everyone
+  [allUsers, allDepartments] = await Promise.all([
+    api.getSubordinates(), // ADMIN role returns everyone
+    api.listDepartments(),
+  ]);
   renderTable('');
 }
 
@@ -97,6 +101,9 @@ function openUserModal(u, container) {
     .map(x => `<option value="${x.user_id}" ${u?.supervisor_id === x.user_id ? 'selected' : ''}>${esc(x.first_name)} ${esc(x.last_name)} — ${esc(x.position_title)}</option>`)
     .join('');
 
+  // แผนกที่คนนี้สังกัดอยู่แล้ว (รองรับหลายแผนก คั่นด้วย comma เช่น 'OP,SRN')
+  const currentDeptKeys = (u?.department || '').split(',').map(s => s.trim()).filter(Boolean);
+
   const backdrop = openModal(`
     <h3 style="margin-top:0">${u ? 'แก้ไขพนักงาน' : 'เพิ่มพนักงานใหม่'}</h3>
     <div class="field"><label>รหัสพนักงาน</label><input id="f-code" value="${esc(u?.emp_code || '')}" ${u ? '' : 'placeholder="เช่น 443757 หรือ 123456 ถ้าไม่มีรหัส"'}></div>
@@ -105,9 +112,14 @@ function openUserModal(u, container) {
       <div class="field"><label>นามสกุล</label><input id="f-ln" value="${esc(u?.last_name || '')}"></div>
     </div>
     <div class="field"><label>ชื่อเล่น</label><input id="f-nick" value="${esc(u?.nickname || '')}"></div>
-    <div class="field-row">
-      <div class="field"><label>ตำแหน่ง</label><input id="f-pos" value="${esc(u?.position_title || '')}"></div>
-      <div class="field"><label>แผนก</label><input id="f-dept" value="${esc(u?.department || '')}"></div>
+    <div class="field"><label>ตำแหน่ง</label><input id="f-pos" value="${esc(u?.position_title || '')}"></div>
+    <div class="field">
+      <label>แผนก (เลือกได้มากกว่า 1 ถ้าคุมหลายแผนก)</label>
+      <div id="dept-checklist" class="dept-checklist"></div>
+      <div class="flex gap-8 mt-8">
+        <input id="new-dept-name" placeholder="ชื่อแผนกใหม่..." style="flex:1">
+        <button type="button" class="btn btn-sm" id="add-dept-btn">+ เพิ่มแผนก</button>
+      </div>
     </div>
     <div class="field-row">
       <div class="field"><label>ระดับชั้น</label>
@@ -127,6 +139,24 @@ function openUserModal(u, container) {
     </div>
   `);
 
+  renderDeptChecklist(backdrop, currentDeptKeys);
+
+  backdrop.querySelector('#add-dept-btn').onclick = async () => {
+    const input = backdrop.querySelector('#new-dept-name');
+    const name = input.value.trim();
+    if (!name) return;
+    try {
+      await api.upsertDepartment({ dept_key: name, label: name });
+      allDepartments = await api.listDepartments();
+      input.value = '';
+      // แผนกที่เพิ่งเพิ่มใหม่ ให้ติ๊กเลือกให้อัตโนมัติ
+      const selectedNow = getSelectedDeptKeys(backdrop);
+      selectedNow.push(name);
+      renderDeptChecklist(backdrop, selectedNow);
+      toast('เพิ่มแผนกใหม่เรียบร้อย');
+    } catch (err) { toast(err.message, 'error'); }
+  };
+
   backdrop.querySelector('#cancel-btn').onclick = () => closeModal(backdrop);
   backdrop.querySelector('#save-btn').onclick = async () => {
     try {
@@ -138,7 +168,7 @@ function openUserModal(u, container) {
         last_name: backdrop.querySelector('#f-ln').value.trim(),
         nickname: backdrop.querySelector('#f-nick').value.trim(),
         position_title: backdrop.querySelector('#f-pos').value.trim(),
-        department: backdrop.querySelector('#f-dept').value.trim(),
+        department: getSelectedDeptKeys(backdrop).join(','),
         org_level: Number(backdrop.querySelector('#f-level').value),
         supervisor_id: sup ? Number(sup) : null,
         role: backdrop.querySelector('#f-role').value,
@@ -148,4 +178,18 @@ function openUserModal(u, container) {
       await load(container);
     } catch (err) { toast(err.message, 'error'); }
   };
+}
+
+function renderDeptChecklist(backdrop, selectedKeys) {
+  const wrap = backdrop.querySelector('#dept-checklist');
+  wrap.innerHTML = allDepartments.map(d => `
+    <label class="dept-check-item">
+      <input type="checkbox" value="${esc(d.dept_key)}" ${selectedKeys.includes(d.dept_key) ? 'checked' : ''}>
+      ${esc(d.label)}
+    </label>
+  `).join('') || '<span class="text-dim" style="font-size:12px">ยังไม่มีแผนกในระบบ เพิ่มแผนกแรกด้านล่าง</span>';
+}
+
+function getSelectedDeptKeys(backdrop) {
+  return [...backdrop.querySelectorAll('#dept-checklist input[type=checkbox]:checked')].map(el => el.value);
 }

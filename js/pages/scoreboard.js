@@ -42,11 +42,6 @@ export async function render(container, context) {
       <div class="card-title">Scoreboard เดือน <span id="month-label"></span> ${CURRENT_YEAR_CE + 543}</div>
       <div id="score-table-wrap"></div>
     </div>
-
-    <div class="card mt-16">
-      <div class="card-title">📊 สถิติทีเด็ด เดือน <span id="tactic-stats-month-label"></span></div>
-      <div id="tactic-stats-wrap"></div>
-    </div>
   `;
 
   document.getElementById('month-tabs').innerHTML = MONTHS_TH.map((m, i) => `
@@ -61,7 +56,6 @@ export async function render(container, context) {
       x.style.borderColor = active ? 'var(--accent)' : '';
     });
     renderTable();
-    renderTacticStats();
   });
 
   const viewerSelect = document.getElementById('viewer-select');
@@ -81,7 +75,6 @@ async function loadData() {
   goalMeta = new Map(goals.map(g => [g.goal_id, g]));
   scoreData = sb; // 1 แถวต่อ (goal, metric, month) — ดู sql/patch_005 ของ get_scoreboard
   renderTable();
-  renderTacticStats();
 }
 
 function renderTable() {
@@ -140,6 +133,17 @@ function renderTable() {
             </td>
           </tr>
         `).join('')}
+        ${(gr.meta?.tactics || []).map(t => `
+          <tr>
+            <td colspan="8" style="padding-left:26px;padding-top:6px;padding-bottom:6px;border-top:1px dashed var(--border)">
+              <span style="font-size:12.5px">⚡ ${esc(t.tactic_title)}</span>
+              <span class="pill neutral" style="margin-left:6px;font-size:10.5px">${FREQ_LABEL[t.frequency] || t.frequency}</span>
+              <span id="tactic-stat-${t.tactic_id}" data-tactic="${t.tactic_id}" data-freq="${t.frequency}" style="margin-left:10px">
+                <span class="text-dim" style="font-size:11.5px">กำลังโหลด...</span>
+              </span>
+            </td>
+          </tr>
+        `).join('')}
       `;
       }).join('')}
     </tbody>
@@ -149,52 +153,37 @@ function renderTable() {
   </div>`;
 
   document.getElementById('save-month-btn').onclick = saveMonth;
+  wrap.querySelectorAll('[id^="tactic-stat-"]').forEach(el => loadTacticStat(el));
 }
 
 // ============================================================================
-// สถิติทีเด็ดประจำเดือน — นับจำนวนงวดที่ต้องรายงานตามความถี่ของแต่ละทีเด็ด
-// (คำนวณจาก periodsInMonth) เทียบกับที่รายงานแล้วว่าทำ/ไม่ทำ/ยังไม่รายงาน
+// สถานะทีเด็ดใต้เป้าหมายแต่ละอัน (แสดงในตาราง Scoreboard โดยตรง) — จุดสีต่องวด
+// ที่ตกอยู่ในเดือนที่กำลังดู พร้อม "% เทียบแผน" = จำนวนงวดที่ทำแล้ว / งวดทั้งหมด
+// ที่ควรรายงานในเดือนนั้นตามความถี่ (คำนวณจาก periodsInMonth)
 // ============================================================================
-async function renderTacticStats() {
-  document.getElementById('tactic-stats-month-label').textContent = MONTHS_TH[selectedMonth - 1];
-  const wrap = document.getElementById('tactic-stats-wrap');
-
-  const allTactics = [];
-  [...goalMeta.values()].forEach(g => g.tactics.forEach(t => allTactics.push({ ...t, goal_title: g.goal_title })));
-
-  if (!allTactics.length) {
-    wrap.innerHTML = `<div class="text-dim" style="font-size:13px;padding:6px 0">ยังไม่มีทีเด็ดในปีนี้</div>`;
-    return;
+async function loadTacticStat(el) {
+  const tacticId = Number(el.dataset.tactic);
+  const freq = el.dataset.freq;
+  const periods = periodsInMonth(freq, CURRENT_YEAR_CE, selectedMonth);
+  let checkins = [];
+  if (periods.length) {
+    try { checkins = await api.listTacticCheckins(tacticId, periods[0], periods[periods.length - 1]); } catch { checkins = []; }
   }
-  wrap.innerHTML = `<div class="loading-page"><span class="spinner"></span></div>`;
+  const byDate = new Map(checkins.map(c => [c.period_date, c.done]));
+  const doneCount = checkins.filter(c => c.done).length;
+  const pct = periods.length ? Math.round((doneCount / periods.length) * 100) : null;
+  const pctColor = pct == null ? 'var(--text-dim)' : pct >= 100 ? 'var(--green)' : pct >= 50 ? 'var(--amber)' : 'var(--red)';
 
-  const rows = await Promise.all(allTactics.map(async t => {
-    const periods = periodsInMonth(t.frequency, CURRENT_YEAR_CE, selectedMonth);
-    let checkins = [];
-    if (periods.length) {
-      try { checkins = await api.listTacticCheckins(t.tactic_id, periods[0], periods[periods.length - 1]); } catch { checkins = []; }
-    }
-    const doneCount = checkins.filter(c => c.done).length;
-    const notDoneCount = checkins.filter(c => !c.done).length;
-    const pendingCount = Math.max(0, periods.length - checkins.length);
-    return { ...t, periodsCount: periods.length, doneCount, notDoneCount, pendingCount };
-  }));
+  const dotsHtml = periods.map(p => {
+    const done = byDate.has(p) ? byDate.get(p) : null;
+    const color = done === true ? 'var(--green)' : done === false ? 'var(--red)' : 'var(--border)';
+    return `<span title="${p}" style="display:inline-block;width:9px;height:9px;border-radius:50%;background:${color}"></span>`;
+  }).join('');
 
-  wrap.innerHTML = `<table><thead><tr>
-    <th>ทีเด็ด</th><th>เป้าหมาย</th><th>ความถี่</th><th>งวดในเดือนนี้</th><th>ทำแล้ว</th><th>ไม่ทำ</th><th>ยังไม่รายงาน</th>
-  </tr></thead><tbody>
-    ${rows.map(r => `
-      <tr>
-        <td>${esc(r.tactic_title)}</td>
-        <td class="text-muted">${esc(r.goal_title)}</td>
-        <td class="text-muted">${FREQ_LABEL[r.frequency] || r.frequency}</td>
-        <td class="text-muted">${r.periodsCount}</td>
-        <td style="color:var(--green);font-weight:600">${r.doneCount}</td>
-        <td style="color:var(--red);font-weight:600">${r.notDoneCount}</td>
-        <td class="text-dim">${r.pendingCount}</td>
-      </tr>
-    `).join('')}
-  </tbody></table>`;
+  el.innerHTML = `
+    <span class="flex gap-4" style="display:inline-flex;vertical-align:middle">${dotsHtml}</span>
+    <strong style="margin-left:8px;font-size:12px;color:${pctColor}">${pct != null ? pct + '% เทียบแผน' : 'ไม่มีงวดในเดือนนี้'}</strong>
+  `;
 }
 
 function openScoreboardImportModal() {

@@ -84,44 +84,58 @@ export async function render(container, { user }) {
   Chart.defaults.font.family = 'Sarabun, sans-serif';
   Chart.defaults.borderColor = '#2B3860';
 
-  const labels = monthly.map(m => MONTHS_TH[m.month_num - 1]);
-  new Chart(document.getElementById('trend-chart'), {
-    type: 'line',
-    data: {
-      labels,
-      datasets: [
-        { label: 'เป้าหมาย', data: monthly.map(m => m.weighted_target), borderColor: '#6C8CFF', backgroundColor: 'rgba(108,140,255,.15)', tension: .3, fill: true },
-        { label: 'ผลงานจริง', data: monthly.map(m => m.weighted_actual), borderColor: '#35C97A', backgroundColor: 'rgba(53,201,122,.15)', tension: .3, fill: true },
-      ],
-    },
-    options: { plugins: { legend: { labels: { boxWidth: 10 } } }, scales: { y: { beginAtZero: true } } },
-  });
-
-  const gaugeVal = overallAchv ?? 0;
-  const gaugeColor = gaugeVal >= 100 ? '#35C97A' : gaugeVal >= 80 ? '#F5B93F' : '#F0555C';
-  new Chart(document.getElementById('gauge-chart'), {
-    type: 'doughnut',
-    data: {
-      labels: ['สำเร็จ', 'คงเหลือ'],
-      datasets: [{ data: [Math.min(gaugeVal, 150), Math.max(150 - Math.min(gaugeVal, 150), 0)], backgroundColor: [gaugeColor, '#1D2846'], borderWidth: 0 }],
-    },
-    options: {
-      circumference: 180, rotation: 270, cutout: '75%',
-      plugins: { legend: { display: false }, tooltip: { enabled: false } },
-    },
-    plugins: [{
-      id: 'centerText',
-      afterDraw(chart) {
-        const { ctx, chartArea } = chart;
-        ctx.save();
-        ctx.font = '700 26px Kanit, sans-serif';
-        ctx.fillStyle = '#EAF0FB';
-        ctx.textAlign = 'center';
-        ctx.fillText(gaugeVal + '%', (chartArea.left + chartArea.right) / 2, chartArea.bottom - 6);
-        ctx.restore();
+  try {
+    const trendCanvas = document.getElementById('trend-chart');
+    trendCanvas.replaceWith(trendCanvas.cloneNode()); // กัน error "canvas already in use" ถ้าหน้านี้ถูก render ซ้ำ
+    const labels = monthly.map(m => MONTHS_TH[m.month_num - 1]);
+    new Chart(document.getElementById('trend-chart'), {
+      type: 'line',
+      data: {
+        labels,
+        datasets: [
+          { label: 'เป้าหมาย', data: monthly.map(m => m.weighted_target), borderColor: '#6C8CFF', backgroundColor: 'rgba(108,140,255,.15)', tension: .3, fill: true },
+          { label: 'ผลงานจริง', data: monthly.map(m => m.weighted_actual), borderColor: '#35C97A', backgroundColor: 'rgba(53,201,122,.15)', tension: .3, fill: true },
+        ],
       },
-    }],
-  });
+      options: { plugins: { legend: { labels: { boxWidth: 10 } } }, scales: { y: { beginAtZero: true } } },
+    });
+  } catch (err) {
+    console.error('trend-chart render failed', err);
+    document.getElementById('trend-chart').closest('.card').innerHTML = '<div class="text-dim" style="font-size:13px">ไม่สามารถแสดงกราฟได้ในขณะนี้</div>';
+  }
+
+  try {
+    const gaugeCanvas = document.getElementById('gauge-chart');
+    gaugeCanvas.replaceWith(gaugeCanvas.cloneNode());
+    const gaugeVal = overallAchv ?? 0;
+    const gaugeColor = gaugeVal >= 100 ? '#35C97A' : gaugeVal >= 80 ? '#F5B93F' : '#F0555C';
+    new Chart(document.getElementById('gauge-chart'), {
+      type: 'doughnut',
+      data: {
+        labels: ['สำเร็จ', 'คงเหลือ'],
+        datasets: [{ data: [Math.min(gaugeVal, 150), Math.max(150 - Math.min(gaugeVal, 150), 0)], backgroundColor: [gaugeColor, '#1D2846'], borderWidth: 0 }],
+      },
+      options: {
+        circumference: 180, rotation: 270, cutout: '75%',
+        plugins: { legend: { display: false }, tooltip: { enabled: false } },
+      },
+      plugins: [{
+        id: 'centerText',
+        afterDraw(chart) {
+          const { ctx, chartArea } = chart;
+          ctx.save();
+          ctx.font = '700 26px Kanit, sans-serif';
+          ctx.fillStyle = '#EAF0FB';
+          ctx.textAlign = 'center';
+          ctx.fillText(gaugeVal + '%', (chartArea.left + chartArea.right) / 2, chartArea.bottom - 6);
+          ctx.restore();
+        },
+      }],
+    });
+  } catch (err) {
+    console.error('gauge-chart render failed', err);
+    document.getElementById('gauge-chart').closest('.card').innerHTML = '<div class="text-dim" style="font-size:13px">ไม่สามารถแสดงกราฟได้ในขณะนี้</div>';
+  }
 }
 
 function esc(s) { const d = document.createElement('div'); d.textContent = s ?? ''; return d.innerHTML; }

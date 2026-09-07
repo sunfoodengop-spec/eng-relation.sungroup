@@ -52,33 +52,43 @@ async function load(targetUserId) {
   const gaugeCanvas = document.getElementById('gauge-chart');
   gaugeCanvas.replaceWith(gaugeCanvas.cloneNode());
 
-  new Chart(document.getElementById('bar-chart'), {
-    type: 'bar',
-    data: {
-      labels: monthly.map(m => MONTHS_TH[m.month_num - 1]),
-      datasets: [
-        { label: 'เป้าหมาย', data: monthly.map(m => m.weighted_target), backgroundColor: 'rgba(108,140,255,.55)', borderRadius: 4 },
-        { label: 'ผลงานจริง', data: monthly.map(m => m.weighted_actual), backgroundColor: 'rgba(53,201,122,.65)', borderRadius: 4 },
-      ],
-    },
-    options: { plugins: { legend: { labels: { boxWidth: 10 } } }, scales: { y: { beginAtZero: true } } },
-  });
-
-  const color = overallAchv >= 100 ? '#35C97A' : overallAchv >= 80 ? '#F5B93F' : '#F0555C';
-  new Chart(document.getElementById('gauge-chart'), {
-    type: 'doughnut',
-    data: { labels: ['สำเร็จ', 'คงเหลือ'], datasets: [{ data: [Math.min(overallAchv, 150), Math.max(150 - Math.min(overallAchv, 150), 0)], backgroundColor: [color, '#1D2846'], borderWidth: 0 }] },
-    options: { circumference: 180, rotation: 270, cutout: '75%', plugins: { legend: { display: false }, tooltip: { enabled: false } } },
-    plugins: [{
-      id: 'centerText',
-      afterDraw(chart) {
-        const { ctx: c, chartArea } = chart;
-        c.save(); c.font = '700 26px Kanit, sans-serif'; c.fillStyle = '#EAF0FB'; c.textAlign = 'center';
-        c.fillText(overallAchv + '%', (chartArea.left + chartArea.right) / 2, chartArea.bottom - 6);
-        c.restore();
+  try {
+    new Chart(document.getElementById('bar-chart'), {
+      type: 'bar',
+      data: {
+        labels: monthly.map(m => MONTHS_TH[m.month_num - 1]),
+        datasets: [
+          { label: 'เป้าหมาย', data: monthly.map(m => m.weighted_target), backgroundColor: 'rgba(108,140,255,.55)', borderRadius: 4 },
+          { label: 'ผลงานจริง', data: monthly.map(m => m.weighted_actual), backgroundColor: 'rgba(53,201,122,.65)', borderRadius: 4 },
+        ],
       },
-    }],
-  });
+      options: { plugins: { legend: { labels: { boxWidth: 10 } } }, scales: { y: { beginAtZero: true } } },
+    });
+  } catch (err) {
+    console.error('bar-chart render failed', err);
+    document.getElementById('bar-chart').closest('.card').innerHTML = '<div class="text-dim" style="font-size:13px">ไม่สามารถแสดงกราฟได้ในขณะนี้</div>';
+  }
+
+  try {
+    const color = overallAchv >= 100 ? '#35C97A' : overallAchv >= 80 ? '#F5B93F' : '#F0555C';
+    new Chart(document.getElementById('gauge-chart'), {
+      type: 'doughnut',
+      data: { labels: ['สำเร็จ', 'คงเหลือ'], datasets: [{ data: [Math.min(overallAchv, 150), Math.max(150 - Math.min(overallAchv, 150), 0)], backgroundColor: [color, '#1D2846'], borderWidth: 0 }] },
+      options: { circumference: 180, rotation: 270, cutout: '75%', plugins: { legend: { display: false }, tooltip: { enabled: false } } },
+      plugins: [{
+        id: 'centerText',
+        afterDraw(chart) {
+          const { ctx: c, chartArea } = chart;
+          c.save(); c.font = '700 26px Kanit, sans-serif'; c.fillStyle = '#EAF0FB'; c.textAlign = 'center';
+          c.fillText(overallAchv + '%', (chartArea.left + chartArea.right) / 2, chartArea.bottom - 6);
+          c.restore();
+        },
+      }],
+    });
+  } catch (err) {
+    console.error('gauge-chart render failed', err);
+    document.getElementById('gauge-chart').closest('.card').innerHTML = '<div class="text-dim" style="font-size:13px">ไม่สามารถแสดงกราฟได้ในขณะนี้</div>';
+  }
 
   const progressWrap = document.getElementById('progress-list');
   progressWrap.innerHTML = tactics.length ? tactics.map(t => {

@@ -262,14 +262,19 @@ function openTacticModal(goalId, tactic) {
 // คลิกจุดในแถบประวัติเพื่อ "ย้อนหลังกรอก" งวดเก่าได้ เหมือนหน้า Scoreboard ที่
 // เลือกเดือนย้อนหลังกรอกได้ ไม่ได้บังคับกรอกแค่งวดปัจจุบันงวดเดียว
 // ============================================================================
+// จำนวน "งวดย้อนหลัง" ที่แสดงในแถบประวัติ ปรับตามความถี่ให้มีความหมายจริง —
+// รายวันย้อนได้ทั้งเดือน, รายสัปดาห์ย้อนได้ ~2 เดือน, รายเดือนย้อนได้ครึ่งปี
+// (ก่อนหน้านี้ใช้ 12 คงที่ทุกความถี่ ทำให้รายวัน/รายสัปดาห์เห็นย้อนหลังสั้นเกินไป)
+const HISTORY_COUNT = { DAILY: 30, WEEKLY: 8, MONTHLY: 6 };
+
 async function loadCheckinWidget(el, selectedPeriod) {
   const tacticId = Number(el.dataset.tactic);
   const freq = el.dataset.freq;
   const isShared = el.dataset.shared === 'true';
   const nowPeriod = currentPeriodDate(freq);
   selectedPeriod = selectedPeriod || nowPeriod;
-  // ดูย้อนหลัง 12 งวดล่าสุด (รวมงวดปัจจุบัน) ให้คลิกย้อนกรอกได้
-  const periods = Array.from({ length: 12 }, (_, i) => stepPeriod(nowPeriod, freq, -(11 - i)));
+  const historyCount = HISTORY_COUNT[freq] || 12;
+  const periods = Array.from({ length: historyCount }, (_, i) => stepPeriod(nowPeriod, freq, -(historyCount - 1 - i)));
   let rows = [];
   try { rows = await api.listTacticCheckins(tacticId, periods[0], nowPeriod); } catch { rows = []; }
   const byDate = new Map(rows.map(r => [r.period_date, r.done]));
@@ -284,7 +289,7 @@ async function loadCheckinWidget(el, selectedPeriod) {
   const curDone = byDate.has(selectedPeriod) ? byDate.get(selectedPeriod) : null;
   el.innerHTML = `
     <div class="flex gap-8" style="align-items:center;flex-wrap:wrap">
-      <span class="text-dim" style="font-size:11px">12 งวดล่าสุด (คลิกจุดเพื่อย้อนหลังกรอก):</span>
+      <span class="text-dim" style="font-size:11px">${historyCount} งวดล่าสุด (คลิกจุดเพื่อย้อนหลังกรอก):</span>
       <span class="flex gap-4">${dotsHtml}</span>
     </div>
     <div class="flex gap-8" style="align-items:center;margin-top:6px;flex-wrap:wrap">

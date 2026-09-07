@@ -136,11 +136,20 @@ export async function render(container, ctx) {
     rowTop[lv] = y;
     const rowCenterY = y + CARD_H / 2;
     columns.forEach(col => {
-      mainCell[`${lv}|${col.key}`].forEach((p, i) => {
-        nodePos.set(p.user_id, { x: mainLeftX[col.key] + i * (CARD_W + CARD_GAP_X) + CARD_W / 2, y: rowCenterY });
+      // จัดกึ่งกลางแนวนอนของคนแต่ละแถวภายในความกว้างเลนของคอลัมน์นั้น (ไม่ใช่ชิดซ้าย)
+      // เพื่อให้สายที่โยงมาจากหัวหน้าด้านบน (เช่น หัวหน้าคนเดียวใน 1 แถว แต่ลูกทีม
+      // 2 คนในแถวถัดไป) วางตัวสมมาตรอยู่กึ่งกลางของลูกทีมเสมอ แทนที่จะชิดซ้าย
+      const mainRow = mainCell[`${lv}|${col.key}`];
+      const mainRowW = mainRow.length * (CARD_W + CARD_GAP_X) - CARD_GAP_X;
+      const mainStartX = mainLeftX[col.key] + (mainW[col.key] - mainRowW) / 2;
+      mainRow.forEach((p, i) => {
+        nodePos.set(p.user_id, { x: mainStartX + i * (CARD_W + CARD_GAP_X) + CARD_W / 2, y: rowCenterY });
       });
-      specCell[`${lv}|${col.key}`].forEach((p, i) => {
-        nodePos.set(p.user_id, { x: specLeftX[col.key] + i * (CARD_W + CARD_GAP_X) + CARD_W / 2, y: rowCenterY });
+      const specRow = specCell[`${lv}|${col.key}`];
+      const specRowW = specRow.length * (CARD_W + CARD_GAP_X) - CARD_GAP_X;
+      const specStartX = specLeftX[col.key] + (specW[col.key] - specRowW) / 2;
+      specRow.forEach((p, i) => {
+        nodePos.set(p.user_id, { x: specStartX + i * (CARD_W + CARD_GAP_X) + CARD_W / 2, y: rowCenterY });
       });
     });
     // คนที่ span หลายคอลัมน์: วาง Block ไว้ตรงกลางของทุกคอลัมน์ที่ตัวเองคุม
@@ -188,13 +197,14 @@ export async function render(container, ctx) {
   `).join('');
 
   container.innerHTML = `
-    <div class="card mb-16" style="padding:10px 14px">
+    <div class="card mb-16 flex-between" style="padding:10px 14px">
       <p class="text-muted" style="margin:0;font-size:13px">
         คลิกที่การ์ดพนักงานเพื่อดูเป้าหมาย/ทีเด็ด/Scoreboard ${currentUser.role === 'ADMIN' ? '· สิทธิ์ผู้ดูแลระบบสามารถเพิ่ม/แก้ไขเป้าหมาย ทีเด็ด และลบพนักงานได้จากหน้านี้' : '· ผู้บังคับบัญชาสามารถลบลูกน้องในสายงานของตนได้'}
         · เส้นประ = สายผู้เชี่ยวชาญ/ผู้ชำนาญการ
       </p>
+      <button class="btn btn-sm" id="export-pdf-btn" style="white-space:nowrap">📄 Export PDF</button>
     </div>
-    <div class="org-tree-wrap">
+    <div class="org-tree-wrap" id="org-print-root">
       <div class="org-tree-canvas" style="width:${totalWidth}px;height:${totalHeight}px">
         ${colBgHtml}
         ${columns.map(col => `<div class="org-tree-col-label" style="left:${colCenterX[col.key]}px;top:${colLabelY}px;width:${colTotalW[col.key]}px">${esc(col.label)}</div>`).join('')}
@@ -223,8 +233,41 @@ export async function render(container, ctx) {
   container.querySelectorAll('[data-person]').forEach(el => {
     el.onclick = () => openPersonModal(Number(el.dataset.person));
   });
+  document.getElementById('export-pdf-btn').onclick = () => exportOrgChartPDF(totalWidth, totalHeight);
 
   allPeople.forEach(p => loadAchievementBadge(p.user_id));
+}
+
+// ============================================================================
+// Export PDF — ใช้ browser "พิมพ์" (window.print) แทนการแปลงเป็นรูปภาพ (canvas/PNG)
+// เพราะข้อความและเส้น SVG จะยังเป็น vector อยู่เสมอ ซูมเข้าไปเท่าไหร่ก็ไม่แตก
+// ต่างจากการแปลงเป็น PNG ก่อนที่จะเบลอ/แตกเป็นพิกเซลเมื่อซูม — ปรับ scale ให้พอดี
+// กระดาษ 1 หน้าแนวนอนก่อนสั่งพิมพ์ แล้วคืนค่าทันทีหลังพิมพ์เสร็จ (เห็นผลปกติต่อ)
+// ============================================================================
+function exportOrgChartPDF(totalWidth, totalHeight) {
+  const root = document.getElementById('org-print-root');
+  const canvas = root?.querySelector('.org-tree-canvas');
+  if (!root || !canvas) return;
+
+  // ขนาดพื้นที่พิมพ์โดยประมาณของกระดาษแนวนอน 1 หน้า (px ที่ ~96dpi หักขอบแล้ว)
+  const PAGE_W = 1120, PAGE_H = 760;
+  const scale = Math.min(PAGE_W / totalWidth, PAGE_H / totalHeight, 1);
+  canvas.style.transform = `scale(${scale})`;
+  canvas.style.transformOrigin = 'top left';
+  root.style.width = `${totalWidth * scale}px`;
+  root.style.height = `${totalHeight * scale}px`;
+
+  document.body.classList.add('printing-org-chart');
+  const cleanup = () => {
+    document.body.classList.remove('printing-org-chart');
+    canvas.style.transform = '';
+    canvas.style.transformOrigin = '';
+    root.style.width = '';
+    root.style.height = '';
+    window.removeEventListener('afterprint', cleanup);
+  };
+  window.addEventListener('afterprint', cleanup);
+  setTimeout(() => { window.print(); }, 60); // รอ reflow ก่อนเปิดไดอะล็อกพิมพ์
 }
 
 function nodeHtml(p, pos, isTop, isSpan, isSpecialistNode) {

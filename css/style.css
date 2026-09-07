@@ -288,3 +288,15 @@ tr.clickable:hover { background: var(--bg-hover); cursor: pointer; }
 .sb-modal-table tr.goal-row td.goal-title-cell { font-weight: 600; background: var(--bg-panel-2); }
 .sb-modal-table tr.tactic-row td.goal-title-cell { padding-left: 22px; color: var(--text-muted); }
 .sb-modal-table td.actions-cell { white-space: nowrap; }
+
+/* ---- Export PDF ผังองค์กร: พิมพ์เฉพาะ #org-print-root เป็นหน้าเดียวแนวนอน ---- */
+@media print {
+  body.printing-org-chart * { visibility: hidden; }
+  body.printing-org-chart #org-print-root,
+  body.printing-org-chart #org-print-root * { visibility: visible; }
+  body.printing-org-chart #org-print-root {
+    position: fixed; left: 0; top: 0; overflow: visible; padding: 0; margin: 0;
+  }
+  body.printing-org-chart .org-tree-node { box-shadow: none; }
+  @page { size: landscape; margin: 8mm; }
+}

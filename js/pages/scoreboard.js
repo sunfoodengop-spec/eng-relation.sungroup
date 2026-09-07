@@ -30,6 +30,7 @@ export async function render(container, context) {
 
     <div class="hint-box mb-16">
       💡 เป้าหมายกำหนดที่หน้า "เป้าหมาย &amp; ทีเด็ด" เพียงจุดเดียว (รายปี) — หน้านี้กรอกได้แค่ <strong>ผลงานจริง</strong> ของแต่ละเดือนเท่านั้น
+      ถ้าเป้าหมายมีมากกว่า 1 ตัววัด แถวสรุป "ภาพรวม" จะใช้ตัววัดที่แย่ที่สุดในเดือนนั้นเป็นตัวชี้ขาดว่าผ่านหรือไม่
     </div>
 
     <div class="card mb-16" style="padding:10px 14px">
@@ -71,7 +72,7 @@ async function loadData() {
     api.getScoreboard(viewingUserId, CURRENT_YEAR_CE),
   ]);
   goalMeta = new Map(goals.map(g => [g.goal_id, g]));
-  scoreData = sb;
+  scoreData = sb; // 1 แถวต่อ (goal, metric, month) — ดู sql/patch_005 ของ get_scoreboard
   renderTable();
 }
 
@@ -85,39 +86,54 @@ function renderTable() {
     return;
   }
 
-  const rows = goalIds.map(gid => {
-    const goalRow = scoreData.find(r => r.goal_id === gid);
-    const monthRow = scoreData.find(r => r.goal_id === gid && r.month_num === selectedMonth) || {};
+  const groups = goalIds.map(gid => {
+    const rowsThisMonth = scoreData.filter(r => r.goal_id === gid && r.month_num === selectedMonth);
     const meta = goalMeta.get(gid);
-    return { gid, title: goalRow.goal_title, weight: goalRow.weight_percentage, m: monthRow, meta };
+    return { gid, title: rowsThisMonth[0]?.goal_title, weight: rowsThisMonth[0]?.weight_percentage, meta, metrics: rowsThisMonth };
   });
 
   wrap.innerHTML = `<table>
     <thead><tr>
-      <th>เป้าหมาย</th><th>น้ำหนัก</th><th>เป้าหมาย (คงที่ทั้งปี)</th><th>ผลงานจริงเดือนนี้</th>
+      <th>เป้าหมาย / ตัววัด</th><th>น้ำหนัก</th><th>เป้าหมาย</th><th>ผลงานจริงเดือนนี้</th>
       <th>ส่วนต่าง</th><th>% สำเร็จ</th><th>สถานะ</th><th>การอนุมัติ</th>
     </tr></thead>
     <tbody>
-      ${rows.map(r => `
-        <tr>
-          <td>${esc(r.title)} ${r.meta?.is_shared ? `<span class="pill yellow" style="margin-left:6px"><span class="dot"></span>ถือร่วมกับ ${esc(r.meta.owner_name)}</span>` : ''}</td>
-          <td class="text-muted">${r.weight ?? '-'}%</td>
-          <td class="text-muted">
-            <strong>${OPERATOR_SYMBOL[r.meta?.evaluation_operator] || '≥'} ${r.m.target_val ?? '-'}</strong>
-            ${r.meta?.metric_unit ? ' ' + esc(r.meta.metric_unit) : ''}
-          </td>
-          <td class="month-cell">${r.meta?.is_shared
-            ? `<span class="text-muted">${r.m.actual_val ?? '-'}</span>`
-            : `<input type="number" step="0.01" data-actual="${r.gid}" value="${r.m.actual_val ?? ''}">`}</td>
-          <td class="text-muted">${r.m.variance_val ?? '-'}</td>
-          <td class="text-muted">${r.m.achievement_percentage != null ? r.m.achievement_percentage + '%' : '-'}</td>
-          <td>${statusPill(r.m.status_color)}</td>
+      ${groups.map(gr => {
+        const overall = gr.metrics[0]; // overall_* ซ้ำเท่ากันทุกแถวในกลุ่มเดียวกัน
+        return `
+        <tr style="background:var(--bg-panel-2)">
           <td>
-            ${approvalPill(r.m.approval_status || 'DRAFT')}
-            ${r.m.approval_status === 'REJECTED' && r.m.reviewer_comments ? `<div class="text-dim" style="font-size:11.5px;margin-top:4px">${esc(r.m.reviewer_comments)}</div>` : ''}
+            <strong>${esc(gr.title)}</strong>
+            ${gr.meta?.is_shared ? `<span class="pill yellow" style="margin-left:6px"><span class="dot"></span>ถือร่วมกับ ${esc(gr.meta.owner_name)}</span>` : ''}
+            <span class="text-dim" style="font-size:12px">(${gr.metrics.length} ตัววัด)</span>
           </td>
+          <td class="text-muted">${gr.weight ?? '-'}%</td>
+          <td class="text-dim" style="font-size:12px">ภาพรวม</td>
+          <td class="text-dim" style="font-size:12px">(ตัววัดแย่สุด)</td>
+          <td>-</td>
+          <td><strong>${overall?.overall_achievement_percentage != null ? overall.overall_achievement_percentage + '%' : '-'}</strong></td>
+          <td>${statusPill(overall?.overall_status_color)}</td>
+          <td></td>
         </tr>
-      `).join('')}
+        ${gr.metrics.map(m => `
+          <tr>
+            <td style="padding-left:26px" class="text-muted">${esc(m.metric_unit || '-')}</td>
+            <td></td>
+            <td class="text-muted"><strong>${OPERATOR_SYMBOL[m.evaluation_operator] || '≥'} ${m.target_val ?? '-'}</strong></td>
+            <td class="month-cell">${gr.meta?.is_shared
+              ? `<span class="text-muted">${m.actual_val ?? '-'}</span>`
+              : `<input type="number" step="0.01" data-actual="${m.metric_id}" value="${m.actual_val ?? ''}">`}</td>
+            <td class="text-muted">${m.variance_val ?? '-'}</td>
+            <td class="text-muted">${m.achievement_percentage != null ? m.achievement_percentage + '%' : '-'}</td>
+            <td>${statusPill(m.status_color)}</td>
+            <td>
+              ${approvalPill(m.approval_status || 'DRAFT')}
+              ${m.approval_status === 'REJECTED' && m.reviewer_comments ? `<div class="text-dim" style="font-size:11.5px;margin-top:4px">${esc(m.reviewer_comments)}</div>` : ''}
+            </td>
+          </tr>
+        `).join('')}
+      `;
+      }).join('')}
     </tbody>
   </table>
   <div class="flex" style="justify-content:flex-end;margin-top:14px">
@@ -130,12 +146,12 @@ function renderTable() {
 function openScoreboardImportModal() {
   const goals = [...goalMeta.values()];
   if (!goals.length) { toast('ยังไม่มีเป้าหมายในปีนี้ กรุณาไปที่หน้า "เป้าหมาย & ทีเด็ด" ก่อน', 'error'); return; }
-  const editableGoals = goals.filter(g => !g.is_shared); // ถือเป้าร่วม แก้จากที่นี่ไม่ได้ (อ่านอย่างเดียว)
+  const editableGoals = goals.filter(g => !g.is_shared && g.metrics.length); // ถือเป้าร่วม แก้จากที่นี่ไม่ได้ (อ่านอย่างเดียว)
   const headers = ['ชื่อเป้าหมาย', ...MONTHS_TH];
   const blankRows = editableGoals.map(g => [g.goal_title, ...Array(12).fill('')]);
   openPasteImportModal({
     title: '📋 นำเข้าผลงานจริงทั้งปีจาก Excel / Google Sheet',
-    instructions: `นำเข้าผลงานจริงของ "${viewingUserId === ctx.user.user_id ? 'ตัวเอง' : 'ลูกน้องที่กำลังดูอยู่'}" ปี ${CURRENT_YEAR_CE + 543} — กรอกได้ทั้ง 12 เดือนพร้อมกัน คอลัมน์ที่เว้นว่างไว้จะไม่ถูกแตะต้อง (ค่าเดิมยังอยู่)`,
+    instructions: `นำเข้าผลงานจริงของ "${viewingUserId === ctx.user.user_id ? 'ตัวเอง' : 'ลูกน้องที่กำลังดูอยู่'}" ปี ${CURRENT_YEAR_CE + 543} — กรอกได้ทั้ง 12 เดือนพร้อมกัน คอลัมน์ที่เว้นว่างไว้จะไม่ถูกแตะต้อง (ค่าเดิมยังอยู่) นำเข้าได้เฉพาะ "ตัววัดหลักตัวแรก" ของแต่ละเป้าหมายเท่านั้น ตัววัดอื่นกรอกในตารางด้านบนเอง`,
     headers, blankRows, filename: 'scoreboard_template.csv',
     onImport: async (rows) => {
       let ok = 0, fail = 0, skip = 0;
@@ -143,14 +159,15 @@ function openScoreboardImportModal() {
         const [title, ...monthVals] = r;
         if (!title || !title.trim()) continue;
         const g = editableGoals.find(g => g.goal_title.trim() === title.trim());
-        if (!g) { skip++; continue; }
+        if (!g || !g.metrics[0]) { skip++; continue; }
+        const metricId = g.metrics[0].metric_id;
         for (let i = 0; i < 12; i++) {
           const v = (monthVals[i] || '').trim();
           if (v === '') continue;
           const n = Number(v);
           if (Number.isNaN(n)) { fail++; continue; }
           try {
-            await api.upsertScoreboard({ goal_id: g.goal_id, month_num: i + 1, actual_val: n });
+            await api.upsertScoreboard({ metric_id: metricId, month_num: i + 1, actual_val: n });
             ok++;
           } catch { fail++; }
         }
@@ -165,13 +182,13 @@ async function saveMonth() {
   const btn = document.getElementById('save-month-btn');
   btn.disabled = true; btn.innerHTML = '<span class="spinner"></span> กำลังบันทึก...';
   try {
-    const goalIds = [...new Set(scoreData.map(r => r.goal_id))];
-    for (const gid of goalIds) {
-      const input = document.querySelector(`[data-actual="${gid}"]`);
+    const metricIds = [...new Set(scoreData.filter(r => r.month_num === selectedMonth).map(r => r.metric_id))];
+    for (const mid of metricIds) {
+      const input = document.querySelector(`[data-actual="${mid}"]`);
       if (!input) continue; // ถือเป้าร่วม (read-only) — ไม่มีช่องกรอกให้บันทึก
       const a = input.value;
       await api.upsertScoreboard({
-        goal_id: gid, month_num: selectedMonth,
+        metric_id: mid, month_num: selectedMonth,
         actual_val: a === '' ? null : Number(a),
       });
     }

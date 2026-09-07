@@ -14,6 +14,7 @@ const ERROR_MESSAGES = {
   CANNOT_HOLD_OWN_GOAL: 'ไม่สามารถถือเป้าร่วมกับเป้าหมายของตัวเองได้',
   CANNOT_DELETE_SELF: 'ไม่สามารถลบบัญชีของตัวเองได้',
   DEPARTMENT_KEY_EXISTS: 'มีรหัสแผนกนี้อยู่แล้ว กรุณาใช้ชื่ออื่น',
+  MUST_KEEP_AT_LEAST_ONE_METRIC: 'เป้าหมายต้องมีตัววัดอย่างน้อย 1 ตัวเสมอ ลบตัวนี้ไม่ได้',
 };
 
 function friendlyError(err) {
@@ -73,22 +74,32 @@ export const api = {
   listGoals: (targetUserId, year) => call('list_goals', { p_target_user_id: targetUserId, p_year: year }),
   upsertGoal: (g) => call('upsert_goal', {
     p_goal_id: g.goal_id ?? null, p_target_user_id: g.target_user_id, p_goal_title: g.goal_title,
-    p_metric_unit: g.metric_unit ?? null, p_target_value: g.target_value ?? null,
     p_weight_percentage: g.weight_percentage ?? null, p_year: g.year, p_parent_goal_id: g.parent_goal_id ?? null,
-    p_evaluation_operator: g.evaluation_operator ?? 'GTE',
   }),
   deleteGoal: (goalId) => call('delete_goal', { p_goal_id: goalId }),
+  upsertGoalMetric: (m) => call('upsert_goal_metric', {
+    p_metric_id: m.metric_id ?? null, p_goal_id: m.goal_id, p_metric_unit: m.metric_unit ?? null,
+    p_target_value: m.target_value ?? null, p_evaluation_operator: m.evaluation_operator ?? 'GTE',
+    p_sort_order: m.sort_order ?? 0,
+  }),
+  deleteGoalMetric: (metricId) => call('delete_goal_metric', { p_metric_id: metricId }),
   upsertTactic: (t) => call('upsert_tactic', {
     p_tactic_id: t.tactic_id ?? null, p_goal_id: t.goal_id, p_tactic_title: t.tactic_title,
-    p_action_plan_description: t.action_plan_description ?? null,
+    p_action_plan_description: t.action_plan_description ?? null, p_frequency: t.frequency ?? 'WEEKLY',
   }),
   deleteTactic: (tacticId) => call('delete_tactic', { p_tactic_id: tacticId }),
   holdSharedGoal: (goalId) => call('hold_shared_goal', { p_goal_id: goalId }),
   releaseSharedGoal: (goalId) => call('release_shared_goal', { p_goal_id: goalId }),
+  checkinTactic: (c) => call('checkin_tactic', {
+    p_tactic_id: c.tactic_id, p_period_date: c.period_date, p_done: c.done, p_notes: c.notes ?? null,
+  }),
+  listTacticCheckins: (tacticId, fromDate, toDate) => call('list_tactic_checkins', {
+    p_tactic_id: tacticId, p_from_date: fromDate, p_to_date: toDate,
+  }),
 
   // Scoreboard
   upsertScoreboard: (s) => call('upsert_scoreboard', {
-    p_goal_id: s.goal_id, p_month_num: s.month_num, p_actual_val: s.actual_val ?? null,
+    p_metric_id: s.metric_id, p_month_num: s.month_num, p_actual_val: s.actual_val ?? null,
   }),
   getScoreboard: (targetUserId, year) => call('get_scoreboard', { p_target_user_id: targetUserId, p_year: year }),
   submitMonthlyReport: (year, month) => call('submit_monthly_report', { p_year: year, p_month_num: month }),

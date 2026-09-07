@@ -3,6 +3,8 @@ import { toast, openModal, closeModal, confirmDialog, escapeHtml as esc, OPERATO
 import { CURRENT_YEAR_CE } from '../config.js';
 import { openPasteImportModal } from '../pasteImport.js';
 
+const FREQ_LABEL = { DAILY: 'รายวัน', WEEKLY: 'รายสัปดาห์', MONTHLY: 'รายเดือน' };
+
 let ctx; // { user }
 let viewingUserId;
 let subordinates = [];
@@ -75,36 +77,58 @@ async function loadGoals(container) {
         <div>
           <strong style="font-size:15.5px">${esc(g.goal_title)}</strong>
           ${g.is_shared ? `<span class="pill yellow" style="margin-left:8px"><span class="dot"></span>ถือร่วมกับ ${esc(g.owner_name)}</span>` : ''}
-          <div class="text-muted" style="font-size:13px;margin-top:4px">
-            ตัวชี้วัด: ${esc(g.metric_unit || '-')} · เป้าหมาย: <strong>${OPERATOR_SYMBOL[g.evaluation_operator] || '≥'} ${g.target_value ?? '-'}</strong> · น้ำหนัก: ${g.weight_percentage ?? '-'}%
-          </div>
+          <div class="text-muted" style="font-size:13px;margin-top:2px">น้ำหนัก: ${g.weight_percentage ?? '-'}%</div>
         </div>
         <div class="flex gap-8">
           ${g.is_shared ? `
             <button class="btn btn-sm btn-ghost" data-release-goal="${g.goal_id}">เลิกถือร่วม</button>
           ` : `
-            <button class="btn btn-sm" data-edit-goal="${g.goal_id}">แก้ไข</button>
+            <button class="btn btn-sm" data-edit-goal="${g.goal_id}">แก้ไขชื่อ/น้ำหนัก</button>
             <button class="btn btn-sm btn-danger" data-del-goal="${g.goal_id}">ลบ</button>
           `}
         </div>
       </div>
+
+      <div class="mt-16">
+        <div class="flex-between mb-8">
+          <span class="text-muted" style="font-size:13px">ตัววัด (${g.metrics.length}) — ถ้ามีมากกว่า 1 ตัว ตัวที่ "แย่ที่สุด" ในแต่ละเดือนจะเป็นตัวชี้ขาดว่าเป้าหมายผ่านหรือไม่</span>
+          ${g.is_shared ? '' : `<button class="btn btn-sm" data-add-metric="${g.goal_id}">+ เพิ่มตัววัด</button>`}
+        </div>
+        ${g.metrics.map(m => `
+          <div class="flex-between" style="padding:6px 0;border-top:1px solid var(--border);font-size:13.5px">
+            <div>${esc(m.metric_unit || '-')} · เป้าหมาย: <strong>${OPERATOR_SYMBOL[m.evaluation_operator] || '≥'} ${m.target_value ?? '-'}</strong></div>
+            ${g.is_shared ? '' : `
+              <div class="flex gap-8">
+                <button class="btn btn-sm" data-edit-metric="${m.metric_id}" data-goal="${g.goal_id}">แก้ไข</button>
+                ${g.metrics.length > 1 ? `<button class="btn btn-sm btn-danger" data-del-metric="${m.metric_id}">ลบ</button>` : ''}
+              </div>
+            `}
+          </div>
+        `).join('') || '<div class="text-dim" style="font-size:13px;padding:6px 0">ยังไม่มีตัววัด</div>'}
+      </div>
+
       <div class="mt-16">
         <div class="flex-between mb-8">
           <span class="text-muted" style="font-size:13px">ทีเด็ด (${g.tactics.length})</span>
           ${g.is_shared ? '' : `<button class="btn btn-sm" data-add-tactic="${g.goal_id}">+ เพิ่มทีเด็ด</button>`}
         </div>
         ${g.tactics.map(t => `
-          <div class="flex-between" style="padding:8px 0;border-top:1px solid var(--border)">
-            <div>
-              <div>${esc(t.tactic_title)}</div>
-              ${t.action_plan_description ? `<div class="text-dim" style="font-size:12.5px">${esc(t.action_plan_description)}</div>` : ''}
-            </div>
-            ${g.is_shared ? '' : `
-              <div class="flex gap-8">
-                <button class="btn btn-sm" data-edit-tactic='${t.tactic_id}' data-goal="${g.goal_id}">แก้ไข</button>
-                <button class="btn btn-sm btn-danger" data-del-tactic="${t.tactic_id}">ลบ</button>
+          <div style="padding:8px 0;border-top:1px solid var(--border)">
+            <div class="flex-between">
+              <div>
+                <div>${esc(t.tactic_title)} <span class="pill neutral" style="margin-left:6px;font-size:11px">${FREQ_LABEL[t.frequency] || t.frequency}</span></div>
+                ${t.action_plan_description ? `<div class="text-dim" style="font-size:12.5px">${esc(t.action_plan_description)}</div>` : ''}
               </div>
-            `}
+              ${g.is_shared ? '' : `
+                <div class="flex gap-8">
+                  <button class="btn btn-sm" data-edit-tactic='${t.tactic_id}' data-goal="${g.goal_id}">แก้ไข</button>
+                  <button class="btn btn-sm btn-danger" data-del-tactic="${t.tactic_id}">ลบ</button>
+                </div>
+              `}
+            </div>
+            <div id="checkin-${t.tactic_id}" class="mt-8" data-tactic="${t.tactic_id}" data-freq="${t.frequency}" data-shared="${g.is_shared}">
+              <span class="text-dim" style="font-size:12px">กำลังโหลดสถานะรายงาน...</span>
+            </div>
           </div>
         `).join('') || '<div class="text-dim" style="font-size:13px;padding:6px 0">ยังไม่มีทีเด็ด</div>'}
       </div>
@@ -114,6 +138,13 @@ async function loadGoals(container) {
   list.querySelectorAll('[data-edit-goal]').forEach(b => b.onclick = () => openGoalModal(currentGoals.find(g => g.goal_id == b.dataset.editGoal)));
   list.querySelectorAll('[data-del-goal]').forEach(b => b.onclick = () => deleteGoal(b.dataset.delGoal, container));
   list.querySelectorAll('[data-release-goal]').forEach(b => b.onclick = () => releaseGoal(b.dataset.releaseGoal, container));
+  list.querySelectorAll('[data-add-metric]').forEach(b => b.onclick = () => openMetricModal(b.dataset.addMetric, null));
+  list.querySelectorAll('[data-edit-metric]').forEach(b => {
+    const g = currentGoals.find(g => g.goal_id == b.dataset.goal);
+    const m = g.metrics.find(m => m.metric_id == b.dataset.editMetric);
+    b.onclick = () => openMetricModal(b.dataset.goal, m);
+  });
+  list.querySelectorAll('[data-del-metric]').forEach(b => b.onclick = () => deleteMetric(b.dataset.delMetric, container));
   list.querySelectorAll('[data-add-tactic]').forEach(b => b.onclick = () => openTacticModal(b.dataset.addTactic, null));
   list.querySelectorAll('[data-edit-tactic]').forEach(b => b.onclick = () => {
     const g = currentGoals.find(g => g.goal_id == b.dataset.goal);
@@ -121,24 +152,59 @@ async function loadGoals(container) {
     openTacticModal(b.dataset.goal, t);
   });
   list.querySelectorAll('[data-del-tactic]').forEach(b => b.onclick = () => deleteTactic(b.dataset.delTactic, container));
+
+  list.querySelectorAll('[id^="checkin-"]').forEach(el => loadCheckinWidget(el));
 }
 
 function openGoalModal(goal) {
   const backdrop = openModal(`
     <h3 style="margin-top:0">${goal ? 'แก้ไขเป้าหมาย' : 'เพิ่มเป้าหมายใหม่'}</h3>
     <div class="field"><label>ชื่อเป้าหมาย</label><input id="f-title" value="${esc(goal?.goal_title || '')}"></div>
+    <div class="field"><label>น้ำหนัก (%)</label><input id="f-weight" type="number" step="0.01" value="${goal?.weight_percentage ?? ''}"></div>
+    ${!goal ? `<div class="hint-box">เพิ่มตัววัดแรกได้หลังบันทึกเป้าหมายนี้แล้ว จากปุ่ม "+ เพิ่มตัววัด" ในการ์ดเป้าหมาย</div>` : ''}
+    <div class="flex gap-8" style="justify-content:flex-end;margin-top:14px">
+      <button class="btn" id="cancel-btn">ยกเลิก</button>
+      <button class="btn btn-primary" id="save-btn">บันทึก</button>
+    </div>
+  `);
+  backdrop.querySelector('#cancel-btn').onclick = () => closeModal(backdrop);
+  backdrop.querySelector('#save-btn').onclick = async () => {
+    try {
+      const title = backdrop.querySelector('#f-title').value.trim();
+      if (!title) { toast('กรุณากรอกชื่อเป้าหมาย', 'error'); return; }
+      const newGoalId = await api.upsertGoal({
+        goal_id: goal?.goal_id ?? null, target_user_id: viewingUserId, goal_title: title,
+        weight_percentage: numOrNull(backdrop.querySelector('#f-weight').value),
+        year: CURRENT_YEAR_CE, parent_goal_id: goal?.parent_goal_id ?? null,
+      });
+      if (!goal) {
+        const metricId = await api.upsertGoalMetric({ goal_id: newGoalId, metric_unit: '', target_value: null, evaluation_operator: 'GTE', sort_order: 0 });
+        closeModal(backdrop);
+        await loadGoals(document);
+        openMetricModal(newGoalId, { metric_id: metricId, metric_unit: '', target_value: null, evaluation_operator: 'GTE' });
+        return;
+      }
+      closeModal(backdrop);
+      toast('บันทึกเป้าหมายเรียบร้อย');
+      await loadGoals(document);
+    } catch (err) { toast(err.message, 'error'); }
+  };
+}
+
+function openMetricModal(goalId, metric) {
+  const backdrop = openModal(`
+    <h3 style="margin-top:0">${metric?.metric_id ? 'แก้ไขตัววัด' : 'เพิ่มตัววัดใหม่'}</h3>
     <div class="field-row">
-      <div class="field"><label>ตัวชี้วัด (หน่วย)</label><input id="f-unit" value="${esc(goal?.metric_unit || '')}"></div>
-      <div class="field"><label>ค่าเป้าหมาย</label><input id="f-target" type="number" step="0.01" value="${goal?.target_value ?? ''}"></div>
+      <div class="field"><label>ตัวชี้วัด (หน่วย)</label><input id="f-unit" value="${esc(metric?.metric_unit || '')}"></div>
+      <div class="field"><label>ค่าเป้าหมาย</label><input id="f-target" type="number" step="0.01" value="${metric?.target_value ?? ''}"></div>
     </div>
     <div class="field">
       <label>เงื่อนไขบรรลุเป้า (ผลจริง [เงื่อนไข] ค่าเป้าหมาย)</label>
       <select id="f-operator">
-        ${Object.entries(OPERATOR_LABEL_TH).map(([k, v]) => `<option value="${k}" ${(goal?.evaluation_operator || 'GTE') === k ? 'selected' : ''}>${v}</option>`).join('')}
+        ${Object.entries(OPERATOR_LABEL_TH).map(([k, v]) => `<option value="${k}" ${(metric?.evaluation_operator || 'GTE') === k ? 'selected' : ''}>${v}</option>`).join('')}
       </select>
       <div class="text-dim" style="font-size:11.5px;margin-top:4px">เช่น เป้าลดของเสีย/ลดเวลาเครื่องเสีย ให้เลือก "น้อยกว่าหรือเท่ากับ" เพราะยิ่งน้อยยิ่งดี</div>
     </div>
-    <div class="field"><label>น้ำหนัก (%)</label><input id="f-weight" type="number" step="0.01" value="${goal?.weight_percentage ?? ''}"></div>
     <div class="flex gap-8" style="justify-content:flex-end">
       <button class="btn" id="cancel-btn">ยกเลิก</button>
       <button class="btn btn-primary" id="save-btn">บันทึก</button>
@@ -147,17 +213,14 @@ function openGoalModal(goal) {
   backdrop.querySelector('#cancel-btn').onclick = () => closeModal(backdrop);
   backdrop.querySelector('#save-btn').onclick = async () => {
     try {
-      await api.upsertGoal({
-        goal_id: goal?.goal_id ?? null, target_user_id: viewingUserId,
-        goal_title: backdrop.querySelector('#f-title').value.trim(),
+      await api.upsertGoalMetric({
+        metric_id: metric?.metric_id ?? null, goal_id: goalId,
         metric_unit: backdrop.querySelector('#f-unit').value.trim(),
         target_value: numOrNull(backdrop.querySelector('#f-target').value),
-        weight_percentage: numOrNull(backdrop.querySelector('#f-weight').value),
         evaluation_operator: backdrop.querySelector('#f-operator').value,
-        year: CURRENT_YEAR_CE, parent_goal_id: goal?.parent_goal_id ?? null,
       });
       closeModal(backdrop);
-      toast('บันทึกเป้าหมายเรียบร้อย');
+      toast('บันทึกตัววัดเรียบร้อย');
       await loadGoals(document);
     } catch (err) { toast(err.message, 'error'); }
   };
@@ -168,6 +231,12 @@ function openTacticModal(goalId, tactic) {
     <h3 style="margin-top:0">${tactic ? 'แก้ไขทีเด็ด' : 'เพิ่มทีเด็ดใหม่'}</h3>
     <div class="field"><label>ชื่อทีเด็ด</label><input id="f-title" value="${esc(tactic?.tactic_title || '')}"></div>
     <div class="field"><label>รายละเอียดแผนปฏิบัติการ</label><textarea id="f-desc" rows="3">${esc(tactic?.action_plan_description || '')}</textarea></div>
+    <div class="field">
+      <label>ความถี่ในการรายงาน (ทำ/ไม่ทำ)</label>
+      <select id="f-freq">
+        ${Object.entries(FREQ_LABEL).map(([k, v]) => `<option value="${k}" ${(tactic?.frequency || 'WEEKLY') === k ? 'selected' : ''}>${v}</option>`).join('')}
+      </select>
+    </div>
     <div class="flex gap-8" style="justify-content:flex-end">
       <button class="btn" id="cancel-btn">ยกเลิก</button>
       <button class="btn btn-primary" id="save-btn">บันทึก</button>
@@ -180,6 +249,7 @@ function openTacticModal(goalId, tactic) {
         tactic_id: tactic?.tactic_id ?? null, goal_id: goalId,
         tactic_title: backdrop.querySelector('#f-title').value.trim(),
         action_plan_description: backdrop.querySelector('#f-desc').value.trim(),
+        frequency: backdrop.querySelector('#f-freq').value,
       });
       closeModal(backdrop);
       toast('บันทึกทีเด็ดเรียบร้อย');
@@ -188,15 +258,80 @@ function openTacticModal(goalId, tactic) {
   };
 }
 
+// ============================================================================
+// Check-in ทีเด็ด — รายงาน "ทำ/ไม่ทำ" ตามความถี่ที่ตั้งไว้ (รายวัน/สัปดาห์/เดือน)
+// ============================================================================
+function currentPeriodDate(freq) {
+  const now = new Date();
+  if (freq === 'DAILY') return toISODate(now);
+  if (freq === 'MONTHLY') return toISODate(new Date(now.getFullYear(), now.getMonth(), 1));
+  const day = now.getDay();
+  const diffToMonday = day === 0 ? -6 : 1 - day;
+  const monday = new Date(now); monday.setDate(now.getDate() + diffToMonday);
+  return toISODate(monday);
+}
+function stepPeriod(dateStr, freq, delta) {
+  const d = new Date(dateStr + 'T00:00:00');
+  if (freq === 'DAILY') d.setDate(d.getDate() + delta);
+  else if (freq === 'MONTHLY') d.setMonth(d.getMonth() + delta);
+  else d.setDate(d.getDate() + delta * 7);
+  return toISODate(d);
+}
+function toISODate(d) { return d.toISOString().slice(0, 10); }
+function periodLabel(dateStr, freq) {
+  const d = new Date(dateStr + 'T00:00:00');
+  if (freq === 'MONTHLY') return d.toLocaleDateString('th-TH', { year: '2-digit', month: 'short' });
+  return d.toLocaleDateString('th-TH', { day: 'numeric', month: 'short' });
+}
+
+async function loadCheckinWidget(el) {
+  const tacticId = Number(el.dataset.tactic);
+  const freq = el.dataset.freq;
+  const isShared = el.dataset.shared === 'true';
+  const nowPeriod = currentPeriodDate(freq);
+  const periods = Array.from({ length: 6 }, (_, i) => stepPeriod(nowPeriod, freq, -(5 - i)));
+  let rows = [];
+  try { rows = await api.listTacticCheckins(tacticId, periods[0], nowPeriod); } catch { rows = []; }
+  const byDate = new Map(rows.map(r => [r.period_date, r.done]));
+
+  const dotsHtml = periods.map(p => {
+    const done = byDate.has(p) ? byDate.get(p) : null;
+    const color = done === true ? 'var(--green)' : done === false ? 'var(--red)' : 'var(--border)';
+    return `<span title="${p}" style="display:inline-block;width:10px;height:10px;border-radius:50%;background:${color}"></span>`;
+  }).join('');
+
+  const curDone = byDate.has(nowPeriod) ? byDate.get(nowPeriod) : null;
+  el.innerHTML = `
+    <div class="flex gap-8" style="align-items:center;flex-wrap:wrap">
+      <span class="text-dim" style="font-size:11px">6 งวดล่าสุด:</span>
+      <span class="flex gap-4">${dotsHtml}</span>
+      <span class="text-dim" style="font-size:11px">· งวดนี้ (${periodLabel(nowPeriod, freq)}):</span>
+      ${isShared ? `
+        <span class="text-dim" style="font-size:12px">${curDone === true ? '✓ ทำแล้ว' : curDone === false ? '✗ ยังไม่ทำ' : 'ยังไม่รายงาน'}</span>
+      ` : `
+        <button class="btn btn-sm ${curDone === true ? 'btn-primary' : ''}" data-checkin-done="1">✓ ทำแล้ว</button>
+        <button class="btn btn-sm ${curDone === false ? 'btn-danger' : ''}" data-checkin-done="0">✗ ยังไม่ทำ</button>
+      `}
+    </div>
+  `;
+  if (isShared) return;
+  el.querySelectorAll('[data-checkin-done]').forEach(b => b.onclick = async () => {
+    try {
+      await api.checkinTactic({ tactic_id: tacticId, period_date: nowPeriod, done: b.dataset.checkinDone === '1' });
+      await loadCheckinWidget(el);
+    } catch (err) { toast(err.message, 'error'); }
+  });
+}
+
 function openGoalsImportModal() {
-  const headers = ['ชื่อเป้าหมาย', 'หน่วยวัด', 'ค่าเป้าหมาย', 'น้ำหนัก(%)', 'เงื่อนไข(>,>=,<,<=,=)'];
-  const blankRows = currentGoals.map(g => [
-    g.goal_title, g.metric_unit || '', g.target_value ?? '', g.weight_percentage ?? '',
-    OPERATOR_SYMBOL[g.evaluation_operator] || '≥',
-  ]);
+  const headers = ['ชื่อเป้าหมาย', 'หน่วยวัด (ตัววัดหลัก)', 'ค่าเป้าหมาย', 'น้ำหนัก(%)', 'เงื่อนไข(>,>=,<,<=,=)'];
+  const blankRows = currentGoals.map(g => {
+    const m0 = g.metrics[0] || {};
+    return [g.goal_title, m0.metric_unit || '', m0.target_value ?? '', g.weight_percentage ?? '', OPERATOR_SYMBOL[m0.evaluation_operator] || '≥'];
+  });
   openPasteImportModal({
     title: '📋 นำเข้าเป้าหมายจาก Excel / Google Sheet',
-    instructions: `นำเข้าให้ "${viewingUserId === ctx.user.user_id ? 'ตัวเอง' : 'ลูกน้องที่กำลังดูอยู่'}" ปี ${CURRENT_YEAR_CE + 543} — ถ้าชื่อเป้าหมายตรงกับที่มีอยู่แล้วจะอัปเดตทับ ถ้าไม่มีจะสร้างใหม่ให้อัตโนมัติ`,
+    instructions: `นำเข้าให้ "${viewingUserId === ctx.user.user_id ? 'ตัวเอง' : 'ลูกน้องที่กำลังดูอยู่'}" ปี ${CURRENT_YEAR_CE + 543} — จับคู่ด้วยชื่อเป้าหมายเพื่ออัปเดตทับ (สร้างใหม่ถ้าไม่พบ) นำเข้าได้เฉพาะ "ตัววัดหลักตัวแรก" เท่านั้น ตัววัดเพิ่มเติมให้เพิ่มเองในฟอร์มเป้าหมายทีหลัง`,
     headers, blankRows, filename: 'goals_template.csv',
     onImport: async (rows) => {
       let ok = 0, fail = 0;
@@ -205,12 +340,16 @@ function openGoalsImportModal() {
         if (!title || !title.trim()) continue;
         const existing = currentGoals.find(g => g.goal_title.trim() === title.trim());
         try {
-          await api.upsertGoal({
+          const goalId = await api.upsertGoal({
             goal_id: existing?.goal_id ?? null, target_user_id: viewingUserId,
-            goal_title: title.trim(), metric_unit: (unit || '').trim(),
-            target_value: numOrNull(target), weight_percentage: numOrNull(weight),
-            evaluation_operator: parseOperatorInput(opRaw),
+            goal_title: title.trim(), weight_percentage: numOrNull(weight),
             year: CURRENT_YEAR_CE, parent_goal_id: existing?.parent_goal_id ?? null,
+          });
+          const m0 = existing?.metrics?.[0];
+          await api.upsertGoalMetric({
+            metric_id: m0?.metric_id ?? null, goal_id: goalId,
+            metric_unit: (unit || '').trim(), target_value: numOrNull(target),
+            evaluation_operator: parseOperatorInput(opRaw), sort_order: 0,
           });
           ok++;
         } catch { fail++; }
@@ -223,16 +362,16 @@ function openGoalsImportModal() {
 
 function openTacticsImportModal() {
   if (!currentGoals.length) { toast('กรุณาเพิ่มเป้าหมายอย่างน้อย 1 รายการก่อนนำเข้าทีเด็ด', 'error'); return; }
-  const headers = ['ชื่อเป้าหมายที่แนบ', 'ชื่อทีเด็ด', 'แผนปฏิบัติการ'];
-  const blankRows = currentGoals.filter(g => !g.is_shared).map(g => [g.goal_title, '', '']);
+  const headers = ['ชื่อเป้าหมายที่แนบ', 'ชื่อทีเด็ด', 'แผนปฏิบัติการ', 'ความถี่(รายวัน/รายสัปดาห์/รายเดือน)'];
+  const blankRows = currentGoals.filter(g => !g.is_shared).map(g => [g.goal_title, '', '', 'รายสัปดาห์']);
   openPasteImportModal({
     title: '📋 นำเข้าทีเด็ดจาก Excel / Google Sheet',
-    instructions: 'คอลัมน์แรกต้องพิมพ์ชื่อเป้าหมายให้ตรงกับที่มีอยู่แล้วเป๊ะๆ (ระบบจะจับคู่ให้อัตโนมัติ) แถวที่ไม่พบเป้าหมายที่ตรงกันจะถูกข้าม',
+    instructions: 'คอลัมน์แรกต้องพิมพ์ชื่อเป้าหมายให้ตรงกับที่มีอยู่แล้วเป๊ะๆ (ระบบจะจับคู่ให้อัตโนมัติ) แถวที่ไม่พบเป้าหมายที่ตรงกันจะถูกข้าม ความถี่ถ้าเว้นว่างหรืออ่านไม่ออกจะใช้ "รายสัปดาห์" เป็นค่าเริ่มต้น',
     headers, blankRows, filename: 'tactics_template.csv',
     onImport: async (rows) => {
       let ok = 0, fail = 0, skip = 0;
       for (const r of rows) {
-        const [goalTitle, tacticTitle, desc] = r;
+        const [goalTitle, tacticTitle, desc, freqRaw] = r;
         if (!tacticTitle || !tacticTitle.trim()) continue;
         const g = currentGoals.find(g => g.goal_title.trim() === (goalTitle || '').trim());
         if (!g) { skip++; continue; }
@@ -240,6 +379,7 @@ function openTacticsImportModal() {
           await api.upsertTactic({
             tactic_id: null, goal_id: g.goal_id,
             tactic_title: tacticTitle.trim(), action_plan_description: (desc || '').trim(),
+            frequency: parseFrequencyInput(freqRaw),
           });
           ok++;
         } catch { fail++; }
@@ -250,8 +390,6 @@ function openTacticsImportModal() {
   });
 }
 
-// รับได้ทั้งสัญลักษณ์ (>, >=, ≥, <, <=, ≤, =) และคำไทยเต็ม (จาก OPERATOR_LABEL_TH)
-// ถ้าอ่านไม่ออก/เว้นว่าง ใช้ "มากกว่าหรือเท่ากับ" (GTE) เป็นค่าเริ่มต้น
 function parseOperatorInput(raw) {
   const s = (raw || '').trim();
   const symMap = { '>': 'GT', '>=': 'GTE', '≥': 'GTE', '<': 'LT', '<=': 'LTE', '≤': 'LTE', '=': 'EQ' };
@@ -259,10 +397,20 @@ function parseOperatorInput(raw) {
   const found = Object.entries(OPERATOR_LABEL_TH).find(([, label]) => label === s);
   return found ? found[0] : 'GTE';
 }
+function parseFrequencyInput(raw) {
+  const s = (raw || '').trim();
+  const found = Object.entries(FREQ_LABEL).find(([k, v]) => v === s || k === s.toUpperCase());
+  return found ? found[0] : 'WEEKLY';
+}
 
 async function deleteGoal(goalId, container) {
   if (!(await confirmDialog('ต้องการลบเป้าหมายนี้ใช่หรือไม่? ทีเด็ดภายใต้เป้าหมายนี้จะถูกลบไปด้วย'))) return;
   try { await api.deleteGoal(goalId); toast('ลบเป้าหมายแล้ว'); await loadGoals(container); }
+  catch (err) { toast(err.message, 'error'); }
+}
+async function deleteMetric(metricId, container) {
+  if (!(await confirmDialog('ต้องการลบตัววัดนี้ใช่หรือไม่?'))) return;
+  try { await api.deleteGoalMetric(metricId); toast('ลบตัววัดแล้ว'); await loadGoals(container); }
   catch (err) { toast(err.message, 'error'); }
 }
 async function deleteTactic(tacticId, container) {
@@ -284,8 +432,6 @@ async function loadAdoptPanel() {
     sub: s, goals: await api.listGoals(s.user_id, CURRENT_YEAR_CE),
   })));
 
-  // แสดงเฉพาะเป้าหมายของลูกน้องเอง (ไม่รวมที่ลูกน้องถือร่วมมาจากคนอื่นอีกที กันวนซ้ำ)
-  // และที่ตัวเราเองยังไม่ได้ถือร่วมอยู่แล้ว
   const heldGoalIds = new Set(currentGoals.filter(g => g.is_shared).map(g => g.goal_id));
   const items = [];
   rows.forEach(({ sub, goals }) => goals

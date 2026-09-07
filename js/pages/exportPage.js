@@ -60,25 +60,31 @@ async function doExport(people) {
       const scoreboard = await api.getScoreboard(p.user_id, year);
 
       goals.forEach(g => {
-        const monthly = scoreboard.filter(s => s.goal_id === g.goal_id);
-        const avgAchv = monthly.filter(m => m.achievement_percentage != null);
-        const overallAchv = avgAchv.length ? (avgAchv.reduce((s, m) => s + Number(m.achievement_percentage), 0) / avgAchv.length).toFixed(2) : '';
+        const monthRows = Array.from({ length: 12 }, (_, i) => {
+          const rowsThisMonth = scoreboard.filter(s => s.goal_id === g.goal_id && s.month_num === i + 1);
+          const primary = rowsThisMonth.find(r => r.metric_id === g.metrics[0]?.metric_id) || rowsThisMonth[0];
+          return { primary, overall: rowsThisMonth[0] }; // overall_* เท่ากันทุกแถวของเดือนเดียวกัน
+        });
+        const avgAchv = monthRows.filter(x => x.overall?.overall_achievement_percentage != null);
+        const overallAchv = avgAchv.length
+          ? (avgAchv.reduce((s, x) => s + Number(x.overall.overall_achievement_percentage), 0) / avgAchv.length).toFixed(2)
+          : '';
 
         summaryRows.push({
           'รหัสพนักงาน': p.emp_code || '', 'ชื่อ-นามสกุล': `${p.first_name} ${p.last_name}`,
           'ตำแหน่ง': p.position_title || '', 'แผนก': p.department || '',
-          'เป้าหมาย': g.goal_title, 'ตัวชี้วัด': g.metric_unit || '', 'น้ำหนัก (%)': g.weight_percentage ?? '',
-          '% Achievement เฉลี่ย': overallAchv,
+          'เป้าหมาย': g.goal_title, 'ตัวชี้วัด': g.metrics.map(m => m.metric_unit).filter(Boolean).join(', '),
+          'น้ำหนัก (%)': g.weight_percentage ?? '', '% Achievement เฉลี่ย (ตัววัดแย่สุด)': overallAchv,
         });
 
         MONTHS_TH.forEach((label, i) => {
-          const m = monthly.find(x => x.month_num === i + 1);
+          const { primary, overall } = monthRows[i];
           detailRows.push({
             'ชื่อ-นามสกุล': `${p.first_name} ${p.last_name}`, 'เป้าหมาย': g.goal_title, 'เดือน': label,
-            'เป้าหมาย(ตัวเลข)': m?.target_val ?? '', 'ผลจริง': m?.actual_val ?? '',
-            'ส่วนต่าง': m?.variance_val ?? '', '% สำเร็จ': m?.achievement_percentage ?? '',
-            'สถานะ': m?.status_color === 'GREEN' ? 'เขียว' : m?.status_color === 'YELLOW' ? 'เหลือง' : m?.status_color === 'RED' ? 'แดง' : '',
-            'สถานะอนุมัติ': m?.approval_status || '',
+            'เป้าหมาย(ตัวเลข)': primary?.target_val ?? '', 'ผลจริง': primary?.actual_val ?? '',
+            'ส่วนต่าง': primary?.variance_val ?? '', '% สำเร็จ (ภาพรวม)': overall?.overall_achievement_percentage ?? '',
+            'สถานะ': overall?.overall_status_color === 'GREEN' ? 'เขียว' : overall?.overall_status_color === 'YELLOW' ? 'เหลือง' : overall?.overall_status_color === 'RED' ? 'แดง' : '',
+            'สถานะอนุมัติ': primary?.approval_status || '',
           });
         });
       });

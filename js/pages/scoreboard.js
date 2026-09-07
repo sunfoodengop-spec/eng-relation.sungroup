@@ -2,6 +2,7 @@ import { api } from '../api.js';
 import { toast, statusPill, approvalPill, MONTHS_TH, OPERATOR_SYMBOL, escapeHtml as esc } from '../ui.js';
 import { CURRENT_YEAR_CE } from '../config.js';
 import { openPasteImportModal } from '../pasteImport.js';
+import { FREQ_LABEL, periodsInMonth } from '../tacticPeriods.js';
 
 let ctx, viewingUserId, subordinates = [], selectedMonth, scoreData = [], goalMeta = new Map();
 
@@ -41,6 +42,11 @@ export async function render(container, context) {
       <div class="card-title">Scoreboard เดือน <span id="month-label"></span> ${CURRENT_YEAR_CE + 543}</div>
       <div id="score-table-wrap"></div>
     </div>
+
+    <div class="card mt-16">
+      <div class="card-title">📊 สถิติทีเด็ด เดือน <span id="tactic-stats-month-label"></span></div>
+      <div id="tactic-stats-wrap"></div>
+    </div>
   `;
 
   document.getElementById('month-tabs').innerHTML = MONTHS_TH.map((m, i) => `
@@ -55,6 +61,7 @@ export async function render(container, context) {
       x.style.borderColor = active ? 'var(--accent)' : '';
     });
     renderTable();
+    renderTacticStats();
   });
 
   const viewerSelect = document.getElementById('viewer-select');
@@ -74,6 +81,7 @@ async function loadData() {
   goalMeta = new Map(goals.map(g => [g.goal_id, g]));
   scoreData = sb; // 1 แถวต่อ (goal, metric, month) — ดู sql/patch_005 ของ get_scoreboard
   renderTable();
+  renderTacticStats();
 }
 
 function renderTable() {
@@ -141,6 +149,52 @@ function renderTable() {
   </div>`;
 
   document.getElementById('save-month-btn').onclick = saveMonth;
+}
+
+// ============================================================================
+// สถิติทีเด็ดประจำเดือน — นับจำนวนงวดที่ต้องรายงานตามความถี่ของแต่ละทีเด็ด
+// (คำนวณจาก periodsInMonth) เทียบกับที่รายงานแล้วว่าทำ/ไม่ทำ/ยังไม่รายงาน
+// ============================================================================
+async function renderTacticStats() {
+  document.getElementById('tactic-stats-month-label').textContent = MONTHS_TH[selectedMonth - 1];
+  const wrap = document.getElementById('tactic-stats-wrap');
+
+  const allTactics = [];
+  [...goalMeta.values()].forEach(g => g.tactics.forEach(t => allTactics.push({ ...t, goal_title: g.goal_title })));
+
+  if (!allTactics.length) {
+    wrap.innerHTML = `<div class="text-dim" style="font-size:13px;padding:6px 0">ยังไม่มีทีเด็ดในปีนี้</div>`;
+    return;
+  }
+  wrap.innerHTML = `<div class="loading-page"><span class="spinner"></span></div>`;
+
+  const rows = await Promise.all(allTactics.map(async t => {
+    const periods = periodsInMonth(t.frequency, CURRENT_YEAR_CE, selectedMonth);
+    let checkins = [];
+    if (periods.length) {
+      try { checkins = await api.listTacticCheckins(t.tactic_id, periods[0], periods[periods.length - 1]); } catch { checkins = []; }
+    }
+    const doneCount = checkins.filter(c => c.done).length;
+    const notDoneCount = checkins.filter(c => !c.done).length;
+    const pendingCount = Math.max(0, periods.length - checkins.length);
+    return { ...t, periodsCount: periods.length, doneCount, notDoneCount, pendingCount };
+  }));
+
+  wrap.innerHTML = `<table><thead><tr>
+    <th>ทีเด็ด</th><th>เป้าหมาย</th><th>ความถี่</th><th>งวดในเดือนนี้</th><th>ทำแล้ว</th><th>ไม่ทำ</th><th>ยังไม่รายงาน</th>
+  </tr></thead><tbody>
+    ${rows.map(r => `
+      <tr>
+        <td>${esc(r.tactic_title)}</td>
+        <td class="text-muted">${esc(r.goal_title)}</td>
+        <td class="text-muted">${FREQ_LABEL[r.frequency] || r.frequency}</td>
+        <td class="text-muted">${r.periodsCount}</td>
+        <td style="color:var(--green);font-weight:600">${r.doneCount}</td>
+        <td style="color:var(--red);font-weight:600">${r.notDoneCount}</td>
+        <td class="text-dim">${r.pendingCount}</td>
+      </tr>
+    `).join('')}
+  </tbody></table>`;
 }
 
 function openScoreboardImportModal() {

@@ -2,8 +2,7 @@ import { api } from '../api.js';
 import { toast, openModal, closeModal, confirmDialog, escapeHtml as esc, OPERATOR_SYMBOL, OPERATOR_LABEL_TH } from '../ui.js';
 import { CURRENT_YEAR_CE } from '../config.js';
 import { openPasteImportModal } from '../pasteImport.js';
-
-const FREQ_LABEL = { DAILY: 'รายวัน', WEEKLY: 'รายสัปดาห์', MONTHLY: 'รายเดือน' };
+import { FREQ_LABEL, currentPeriodDate, stepPeriod, periodLabel } from '../tacticPeriods.js';
 
 let ctx; // { user }
 let viewingUserId;
@@ -260,36 +259,17 @@ function openTacticModal(goalId, tactic) {
 
 // ============================================================================
 // Check-in ทีเด็ด — รายงาน "ทำ/ไม่ทำ" ตามความถี่ที่ตั้งไว้ (รายวัน/สัปดาห์/เดือน)
+// คลิกจุดในแถบประวัติเพื่อ "ย้อนหลังกรอก" งวดเก่าได้ เหมือนหน้า Scoreboard ที่
+// เลือกเดือนย้อนหลังกรอกได้ ไม่ได้บังคับกรอกแค่งวดปัจจุบันงวดเดียว
 // ============================================================================
-function currentPeriodDate(freq) {
-  const now = new Date();
-  if (freq === 'DAILY') return toISODate(now);
-  if (freq === 'MONTHLY') return toISODate(new Date(now.getFullYear(), now.getMonth(), 1));
-  const day = now.getDay();
-  const diffToMonday = day === 0 ? -6 : 1 - day;
-  const monday = new Date(now); monday.setDate(now.getDate() + diffToMonday);
-  return toISODate(monday);
-}
-function stepPeriod(dateStr, freq, delta) {
-  const d = new Date(dateStr + 'T00:00:00');
-  if (freq === 'DAILY') d.setDate(d.getDate() + delta);
-  else if (freq === 'MONTHLY') d.setMonth(d.getMonth() + delta);
-  else d.setDate(d.getDate() + delta * 7);
-  return toISODate(d);
-}
-function toISODate(d) { return d.toISOString().slice(0, 10); }
-function periodLabel(dateStr, freq) {
-  const d = new Date(dateStr + 'T00:00:00');
-  if (freq === 'MONTHLY') return d.toLocaleDateString('th-TH', { year: '2-digit', month: 'short' });
-  return d.toLocaleDateString('th-TH', { day: 'numeric', month: 'short' });
-}
-
-async function loadCheckinWidget(el) {
+async function loadCheckinWidget(el, selectedPeriod) {
   const tacticId = Number(el.dataset.tactic);
   const freq = el.dataset.freq;
   const isShared = el.dataset.shared === 'true';
   const nowPeriod = currentPeriodDate(freq);
-  const periods = Array.from({ length: 6 }, (_, i) => stepPeriod(nowPeriod, freq, -(5 - i)));
+  selectedPeriod = selectedPeriod || nowPeriod;
+  // ดูย้อนหลัง 12 งวดล่าสุด (รวมงวดปัจจุบัน) ให้คลิกย้อนกรอกได้
+  const periods = Array.from({ length: 12 }, (_, i) => stepPeriod(nowPeriod, freq, -(11 - i)));
   let rows = [];
   try { rows = await api.listTacticCheckins(tacticId, periods[0], nowPeriod); } catch { rows = []; }
   const byDate = new Map(rows.map(r => [r.period_date, r.done]));
@@ -297,15 +277,18 @@ async function loadCheckinWidget(el) {
   const dotsHtml = periods.map(p => {
     const done = byDate.has(p) ? byDate.get(p) : null;
     const color = done === true ? 'var(--green)' : done === false ? 'var(--red)' : 'var(--border)';
-    return `<span title="${p}" style="display:inline-block;width:10px;height:10px;border-radius:50%;background:${color}"></span>`;
+    const ring = p === selectedPeriod ? 'outline:2px solid var(--accent);outline-offset:1px' : '';
+    return `<button type="button" data-period="${p}" title="${periodLabel(p, freq)}" style="width:12px;height:12px;padding:0;border:none;border-radius:50%;background:${color};cursor:pointer;${ring}"></button>`;
   }).join('');
 
-  const curDone = byDate.has(nowPeriod) ? byDate.get(nowPeriod) : null;
+  const curDone = byDate.has(selectedPeriod) ? byDate.get(selectedPeriod) : null;
   el.innerHTML = `
     <div class="flex gap-8" style="align-items:center;flex-wrap:wrap">
-      <span class="text-dim" style="font-size:11px">6 งวดล่าสุด:</span>
+      <span class="text-dim" style="font-size:11px">12 งวดล่าสุด (คลิกจุดเพื่อย้อนหลังกรอก):</span>
       <span class="flex gap-4">${dotsHtml}</span>
-      <span class="text-dim" style="font-size:11px">· งวดนี้ (${periodLabel(nowPeriod, freq)}):</span>
+    </div>
+    <div class="flex gap-8" style="align-items:center;margin-top:6px;flex-wrap:wrap">
+      <span class="text-dim" style="font-size:11px">งวดที่เลือก (${periodLabel(selectedPeriod, freq)}${selectedPeriod === nowPeriod ? ' · งวดนี้' : ''}):</span>
       ${isShared ? `
         <span class="text-dim" style="font-size:12px">${curDone === true ? '✓ ทำแล้ว' : curDone === false ? '✗ ยังไม่ทำ' : 'ยังไม่รายงาน'}</span>
       ` : `
@@ -314,14 +297,16 @@ async function loadCheckinWidget(el) {
       `}
     </div>
   `;
+  el.querySelectorAll('[data-period]').forEach(b => b.onclick = () => loadCheckinWidget(el, b.dataset.period));
   if (isShared) return;
   el.querySelectorAll('[data-checkin-done]').forEach(b => b.onclick = async () => {
     try {
-      await api.checkinTactic({ tactic_id: tacticId, period_date: nowPeriod, done: b.dataset.checkinDone === '1' });
-      await loadCheckinWidget(el);
+      await api.checkinTactic({ tactic_id: tacticId, period_date: selectedPeriod, done: b.dataset.checkinDone === '1' });
+      await loadCheckinWidget(el, selectedPeriod);
     } catch (err) { toast(err.message, 'error'); }
   });
 }
+
 
 function openGoalsImportModal() {
   const headers = ['ชื่อเป้าหมาย', 'หน่วยวัด (ตัววัดหลัก)', 'ค่าเป้าหมาย', 'น้ำหนัก(%)', 'เงื่อนไข(>,>=,<,<=,=)'];
